@@ -11,6 +11,15 @@ from .packet import (
 from .profile import MemoryProfile
 from .retrieval import CueDrivenRetriever, MemoryHit
 from .runtime import MemoryRuntime
+from .vho import (
+    VHO_PRINCIPLES,
+    VHO_ORIGINAL_ATTACHMENT_SHA256,
+    VHO_SOURCE_SHA256,
+    VHO_STACK,
+    VHO_STATUS,
+    VHO_VERSION,
+    vho_open_seed,
+)
 from .store import (
     APPLICATION_ID,
     EVIDENCE_IDENTITY_VERSION,
@@ -43,4 +52,11 @@ __all__ = [
     "estimate_packet_tokens",
     "canonical_evidence_identity",
     "validate_store",
+    "VHO_PRINCIPLES",
+    "VHO_ORIGINAL_ATTACHMENT_SHA256",
+    "VHO_SOURCE_SHA256",
+    "VHO_STACK",
+    "VHO_STATUS",
+    "VHO_VERSION",
+    "vho_open_seed",
 ]
