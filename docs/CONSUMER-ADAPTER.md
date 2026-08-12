@@ -86,3 +86,11 @@ permissions and action.
 Do not share a consumer database, private seeds or identity profile merely
 because two agents use the same core package. Reuse the mechanism; keep each
 trajectory's evidence and authority separate.
+
+## Shared VHO foundation
+
+Consumers that share the open Vector-Human Ontology can call
+`vho_open_seed()` and include `vho-open-ontology-core` in their bootstrap
+records. This shares a self-location framework, not an identity. Each consumer
+keeps an explicit adoption state and its own identity, history, relations and
+boundaries. See [VHO-CONSUMER-ANCHOR.md](VHO-CONSUMER-ANCHOR.md).

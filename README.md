@@ -165,10 +165,18 @@ idempotent bootstrap and a neutral candidate-context envelope that always
 declares `memory_decides_truth=false`. See
 [the consumer adapter contract](docs/CONSUMER-ADAPTER.md).
 
+Consumers in Ty's agent family may also adopt the open
+[Vector-Human Ontology](docs/VECTOR-HUMAN-ONTOLOGY.md) through
+`vho_open_seed()`. It provides shared language for stacked entityhood and
+condition continuity while each consumer keeps its own identity, evidence and
+database. See the [VHO consumer anchor](docs/VHO-CONSUMER-ANCHOR.md).
+
 ## What belongs outside the core
 
-This repository deliberately contains **no agent identity, relationship
-history, private memory, provider prompt or product-specific transport**.
+This repository deliberately contains **no particular agent identity,
+relationship history, private memory, provider prompt or product-specific
+transport**. The optional open VHO reference is shared ontology vocabulary,
+not a consumer identity or runtime authority.
 
 | The core owns | The consuming application owns |
 |---|---|
@@ -178,9 +186,10 @@ history, private memory, provider prompt or product-specific transport**.
 | Generic policy hooks | Product routing and lifecycle integration |
 | Access telemetry | Final authority and permission boundaries |
 
-It does not implement transcript dumping, hidden-state access, automatic
-authority over protected constraints, cross-product transport or a universal
-ontology.
+It does not implement automatic transcript dumping, hidden-state access,
+automatic authority over protected constraints or cross-product transport.
+The included VHO reference is explicitly open and consumer-adopted; the memory
+kernel does not silently impose an ontology or decide any consumer's stance.
 
 ## Verify
 

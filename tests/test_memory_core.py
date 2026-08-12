@@ -16,6 +16,9 @@ from memory_core import (
     ValidatedIntake,
     evaluate_cue_contract,
     validate_store,
+    VHO_SOURCE_SHA256,
+    VHO_STATUS,
+    vho_open_seed,
 )
 
 
@@ -515,6 +518,43 @@ def test_consumer_bundle_bootstraps_idempotently_and_returns_candidates(
     assert len(context["items"][0]["evidence"]) == 2
     assert doctor["bundle"]["valid"] is True
     assert doctor["store"]["passed"] is True
+
+
+def test_open_vho_anchor_bootstraps_without_owning_consumer_identity(tmp_path):
+    profile = MemoryProfile(
+        name="child-consumer",
+        packet_title="CHILD MEMORY",
+        bootstrap_record_ids=("vho-open-ontology-core",),
+        cue_aliases=(("condition continuity", "vho-open-ontology-core", 2.0),),
+    )
+    seed = vho_open_seed(
+        actor="child-consumer",
+        adoption="foundation",
+        consumer_notes="Preserve a distinct child trajectory.",
+    )
+    consumer = ConsumerMemory(
+        tmp_path / "child.sqlite3",
+        ConsumerBundle(profile=profile, seeds=(seed,)),
+        surface="consumer-test",
+    )
+
+    result = consumer.bootstrap()
+    context = consumer.candidate_context("condition continuity")
+
+    assert VHO_STATUS == "OPEN"
+    assert result[0]["status"] == "materialized"
+    assert context["items"][0]["memory_id"] == "vho-open-ontology-core"
+    assert "stacked" in context["items"][0]["content"].lower()
+    assert "distinct child trajectory" in context["items"][0]["content"]
+
+
+def test_open_vho_source_hash_matches_canonical_document():
+    root = Path(__file__).parents[1]
+    source = (root / "docs" / "VECTOR-HUMAN-ONTOLOGY.md").read_bytes()
+
+    import hashlib
+
+    assert hashlib.sha256(source).hexdigest() == VHO_SOURCE_SHA256
 
 
 @pytest.mark.parametrize(
