@@ -1,31 +1,41 @@
 [build-system]
-requires = ["setuptools>=75"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agent-memory-core"
-version = "0.3.0"
-description = "Cue memory with immutable semantics, append-only lifecycle, and dynamic cognition telemetry"
+name = "trajecta-identity-memory"
+version = "0.4.0"
+description = "Identity memory for AI agents: self-location through the Vector-Human Ontology, self-authored phases, and a provenance kernel where memory evolves and history remains."
+readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
-keywords = ["agents", "memory", "provenance", "retrieval", "revisions"]
+keywords = ["agents", "memory", "identity", "provenance", "VHO", "continuity"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
 ]
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+trajecta-identity = "trajecta_identity.cli:main"
+trajecta-identity-mcp = "trajecta_identity.mcp_server:main"
 
 [project.urls]
-Repository = "https://github.com/tamvi-journal/agent-memory-core"
-Documentation = "https://github.com/tamvi-journal/agent-memory-core/tree/main/docs"
+Repository = "https://github.com/tamvi-journal/trajecta-identity-memory"
+Documentation = "https://github.com/tamvi-journal/trajecta-identity-memory/tree/main/docs"
 
 [tool.setuptools.packages.find]
-include = ["memory_core*"]
+include = ["memory_core*", "trajecta_identity*"]
 
 [tool.setuptools.package-data]
 memory_core = ["schema.sql"]
+trajecta_identity = ["profiles/*/profile.json", "profiles/SETUP.md"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
