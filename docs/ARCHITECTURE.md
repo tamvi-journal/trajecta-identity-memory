@@ -34,6 +34,10 @@ Accessibility is telemetry, not meaning. Tracked retrieval may increase
 accessibility without changing the semantic hash. Read-only retrieval sets
 `track_access=False` and performs no write.
 
+Dormancy is a selection option, not a state change: with `min_accessibility`
+set, low-accessibility revisions are skipped unless a direct cue or a declared
+relation type wakes them. Bootstrap records never go dormant.
+
 Confidence is part of the semantic claim and therefore changes through a new
 revision. Salience, stability and accessibility can be updated through
 `MemoryStore.apply_maintenance()`. That path is transactional, idempotent,
@@ -41,8 +45,8 @@ records a `maintenance` operation, verifies that the semantic hash did not
 change and rejects all other fields. Host applications still decide when a
 maintenance run is justified.
 
-Semantic revision rows, evidence rows, evidence links and lifecycle events are
-protected by SQLite triggers against update and delete. This is physical
+Semantic revision rows, evidence rows, evidence links, lifecycle events and
+relation events are protected by SQLite triggers against update and delete. This is physical
 immutability, not an API convention.
 
 ## Schema and migration

@@ -370,3 +370,71 @@ WHEN NEW.lifecycle_state='current'
 BEGIN
     SELECT RAISE(ABORT, 'record already has a current revision');
 END;
+
+-- Schema v4: relations are an append-only event stream.
+-- memory_relations_v3 is kept only as migration evidence and is no longer
+-- written or read by the runtime.
+CREATE TABLE IF NOT EXISTS memory_relation_events_v4 (
+    relation_event_id TEXT PRIMARY KEY,
+    relation_id TEXT NOT NULL,
+    from_record_id TEXT NOT NULL,
+    to_record_id TEXT NOT NULL,
+    relation_type TEXT NOT NULL,
+    sequence_number INTEGER NOT NULL CHECK(sequence_number >= 1),
+    event_type TEXT NOT NULL CHECK(event_type IN ('assert', 'retract')),
+    weight REAL NOT NULL DEFAULT 1.0,
+    source_revision_id TEXT,
+    evidence_id TEXT,
+    actor TEXT NOT NULL,
+    surface TEXT NOT NULL DEFAULT '',
+    reason TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(from_record_id)
+        REFERENCES memory_records_v3(record_id) ON DELETE RESTRICT,
+    FOREIGN KEY(to_record_id)
+        REFERENCES memory_records_v3(record_id) ON DELETE RESTRICT,
+    FOREIGN KEY(source_revision_id)
+        REFERENCES memory_revisions_v3(revision_id) ON DELETE RESTRICT,
+    FOREIGN KEY(evidence_id)
+        REFERENCES memory_evidence_v3(evidence_id) ON DELETE RESTRICT,
+    UNIQUE(relation_id, sequence_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_core_v4_relation_triple
+ON memory_relation_events_v4(from_record_id, to_record_id, relation_type);
+
+CREATE INDEX IF NOT EXISTS idx_memory_core_v4_relation_sequence
+ON memory_relation_events_v4(relation_id, sequence_number DESC);
+
+CREATE TRIGGER IF NOT EXISTS memory_relation_events_v4_no_update
+BEFORE UPDATE ON memory_relation_events_v4
+BEGIN
+    SELECT RAISE(ABORT, 'memory_relation_events_v4 is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_relation_events_v4_no_delete
+BEFORE DELETE ON memory_relation_events_v4
+BEGIN
+    SELECT RAISE(ABORT, 'memory_relation_events_v4 is append-only');
+END;
+
+CREATE VIEW IF NOT EXISTS memory_relation_current_v4 AS
+SELECT
+    e.relation_id,
+    e.from_record_id,
+    e.to_record_id,
+    e.relation_type,
+    e.weight,
+    e.source_revision_id,
+    e.evidence_id,
+    'active' AS status,
+    e.sequence_number,
+    e.created_at
+FROM memory_relation_events_v4 e
+WHERE e.event_type='assert'
+  AND e.sequence_number=(
+      SELECT MAX(latest.sequence_number)
+      FROM memory_relation_events_v4 latest
+      WHERE latest.relation_id=e.relation_id
+  );

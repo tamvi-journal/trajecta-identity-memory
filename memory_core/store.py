@@ -10,11 +10,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .text import normalize_text
+from .text import normalize_identity_v1, normalize_text
 
 
 APPLICATION_ID = 0x414D4333  # "AMC3"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+LEGACY_V3_VERSION = 3
 EVIDENCE_IDENTITY_VERSION = "evidence-v2"
 
 
@@ -62,7 +63,7 @@ def clamp(value: float) -> float:
 
 
 def _identity_segment(value: str, fallback: str) -> str:
-    normalized = normalize_text(value).strip()
+    normalized = normalize_identity_v1(value).strip()
     normalized = re.sub(r"[^a-z0-9._/-]+", "-", normalized).strip("-")
     return normalized or fallback
 
@@ -167,6 +168,11 @@ class MemoryStore:
             state = "incompatible"
         elif "memory_records_v2" in tables:
             state = "legacy-v2"
+        elif (
+            application_id == APPLICATION_ID
+            and user_version == LEGACY_V3_VERSION
+        ):
+            state = "legacy-v3"
         else:
             state = "unknown"
         return {
@@ -176,7 +182,7 @@ class MemoryStore:
         }
 
     def initialize(self, *, migrate: bool = True) -> dict[str, Any]:
-        """Create v3 or explicitly migrate a recognized v2 store.
+        """Create the current schema or migrate a recognized v2/v3 store.
 
         Ordinary reads never call this method. The compatibility alias `init`
         remains for existing consumers, but it is only used on write paths.
@@ -189,8 +195,10 @@ class MemoryStore:
             raise SchemaVersionError(
                 "database application_id/user_version is newer or foreign"
             )
-        if before["state"] == "legacy-v2" and not migrate:
-            raise MigrationRequiredError("legacy v2 store requires migration")
+        if before["state"] in {"legacy-v2", "legacy-v3"} and not migrate:
+            raise MigrationRequiredError(
+                f"{before['state']} store requires migration"
+            )
 
         schema = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
         with self._raw_connect() as conn:
@@ -213,6 +221,7 @@ class MemoryStore:
             conn.executescript(schema)
             if "memory_records_v2" in tables:
                 self._migrate_v2(conn)
+            self._backfill_relation_events(conn)
             conn.execute(
                 "INSERT INTO memory_meta_v3(key,value) VALUES('schema_version',?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -224,7 +233,10 @@ class MemoryStore:
         return {
             **after,
             "changed": True,
-            "migrated_from": "v2" if before["state"] == "legacy-v2" else None,
+            "migrated_from": {
+                "legacy-v2": "v2",
+                "legacy-v3": "v3",
+            }.get(before["state"]),
         }
 
     def init(self) -> None:
@@ -269,6 +281,13 @@ class MemoryStore:
         if "memory_records_v2" in tables:
             raise MigrationRequiredError(
                 "legacy v2 store must be initialized or migrated before use"
+            )
+        if (
+            application_id == APPLICATION_ID
+            and user_version == LEGACY_V3_VERSION
+        ):
+            raise MigrationRequiredError(
+                "schema v3 store must be initialized or migrated to v4 before use"
             )
         raise SchemaVersionError("memory database is not initialized")
 
@@ -330,7 +349,8 @@ class MemoryStore:
             return []
         with self.connect(readonly=True) as conn:
             rows = conn.execute(
-                "SELECT * FROM memory_relations_v3 WHERE status='active'"
+                "SELECT * FROM memory_relation_current_v4 "
+                "ORDER BY relation_id"
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -649,28 +669,246 @@ class MemoryStore:
         relation_type: str,
         weight: float = 1.0,
         source_revision_id: str | None = None,
-    ) -> None:
+        actor: str = "host",
+        surface: str = "",
+        reason: str = "relation asserted",
+        evidence: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Assert a relation by appending an event. Never rewrites history.
+
+        Re-asserting an unchanged relation is a no-op. A changed weight or
+        source appends a new ``assert`` event; the earlier one stays readable
+        through :meth:`relation_history`.
+        """
+
+        return self._append_relation_event(
+            event_type="assert",
+            relation_id=relation_id,
+            from_record_id=from_record_id,
+            to_record_id=to_record_id,
+            relation_type=relation_type,
+            weight=weight,
+            source_revision_id=source_revision_id,
+            actor=actor,
+            surface=surface,
+            reason=reason,
+            evidence=evidence,
+            idempotency_key=idempotency_key,
+        )
+
+    def retract_relation(
+        self,
+        *,
+        from_record_id: str,
+        to_record_id: str,
+        relation_type: str,
+        actor: str,
+        reason: str,
+        surface: str = "",
+        evidence: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Retract an active relation by appending a ``retract`` event."""
+
+        if not str(actor).strip() or not str(reason).strip():
+            raise ValueError("relation retraction requires actor and reason")
+        return self._append_relation_event(
+            event_type="retract",
+            relation_id=None,
+            from_record_id=from_record_id,
+            to_record_id=to_record_id,
+            relation_type=relation_type,
+            weight=0.0,
+            source_revision_id=None,
+            actor=actor,
+            surface=surface,
+            reason=reason,
+            evidence=evidence,
+            idempotency_key=idempotency_key,
+        )
+
+    def relation_history(
+        self,
+        *,
+        from_record_id: str,
+        to_record_id: str,
+        relation_type: str,
+    ) -> list[dict[str, Any]]:
+        if not self.db_path.exists():
+            return []
+        with self.connect(readonly=True) as conn:
+            rows = conn.execute(
+                "SELECT * FROM memory_relation_events_v4 "
+                "WHERE from_record_id=? AND to_record_id=? AND relation_type=? "
+                "ORDER BY sequence_number",
+                (from_record_id, to_record_id, relation_type),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def _append_relation_event(
+        self,
+        *,
+        event_type: str,
+        relation_id: str | None,
+        from_record_id: str,
+        to_record_id: str,
+        relation_type: str,
+        weight: float,
+        source_revision_id: str | None,
+        actor: str,
+        surface: str,
+        reason: str,
+        evidence: dict[str, Any] | None,
+        idempotency_key: str | None,
+    ) -> dict[str, Any]:
+        relation_type = str(relation_type).strip()
+        if not relation_type:
+            raise ValueError("relation_type must be non-empty")
+        if from_record_id == to_record_id:
+            raise ValueError("a relation needs two different records")
+        weight = float(weight)
+        if event_type == "assert" and not 0.0 <= weight <= 10.0:
+            raise ValueError("relation weight must be between 0 and 10")
         self.initialize()
         with self.connect() as conn:
+            if idempotency_key:
+                prior = conn.execute(
+                    "SELECT * FROM memory_relation_events_v4 "
+                    "WHERE idempotency_key=?",
+                    (idempotency_key,),
+                ).fetchone()
+                if prior:
+                    return {**dict(prior), "status": "duplicate"}
+            latest = conn.execute(
+                "SELECT * FROM memory_relation_events_v4 "
+                "WHERE from_record_id=? AND to_record_id=? AND relation_type=? "
+                "ORDER BY sequence_number DESC LIMIT 1",
+                (from_record_id, to_record_id, relation_type),
+            ).fetchone()
+            if event_type == "retract":
+                if not latest or latest["event_type"] == "retract":
+                    return {
+                        "status": "no_op",
+                        "reason": "relation is not active",
+                        "relation_id": latest["relation_id"] if latest else None,
+                    }
+            elif (
+                latest
+                and latest["event_type"] == "assert"
+                and abs(float(latest["weight"]) - weight) <= 1e-9
+                and latest["source_revision_id"] == source_revision_id
+            ):
+                return {**dict(latest), "status": "no_op"}
+            stable_id = (
+                latest["relation_id"]
+                if latest
+                else (str(relation_id or "").strip() or self._relation_key(
+                    from_record_id, to_record_id, relation_type
+                ))
+            )
+            sequence = int(latest["sequence_number"]) + 1 if latest else 1
+            evidence_id = None
+            if evidence:
+                item = dict(evidence)
+                item.setdefault("actor", actor)
+                item.setdefault("surface", surface)
+                evidence_id = self._insert_evidence(conn, item)
+            key = idempotency_key or (
+                f"relation:{stable_id}:{sequence}:{event_type}"
+            )
+            event_id = "relation-event:" + hashlib.sha256(
+                key.encode("utf-8")
+            ).hexdigest()[:32]
             conn.execute(
-                "INSERT INTO memory_relations_v3("
-                "relation_id,from_record_id,to_record_id,relation_type,"
-                "weight,source_revision_id,status,created_at"
-                ") VALUES(?,?,?,?,?,?,?,?) "
-                "ON CONFLICT(from_record_id,to_record_id,relation_type) "
-                "DO UPDATE SET weight=excluded.weight,"
-                "source_revision_id=excluded.source_revision_id,status='active'",
+                "INSERT INTO memory_relation_events_v4("
+                "relation_event_id,relation_id,from_record_id,to_record_id,"
+                "relation_type,sequence_number,event_type,weight,"
+                "source_revision_id,evidence_id,actor,surface,reason,"
+                "idempotency_key,created_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
-                    relation_id,
+                    event_id,
+                    stable_id,
                     from_record_id,
                     to_record_id,
                     relation_type,
-                    float(weight),
+                    sequence,
+                    event_type,
+                    weight,
                     source_revision_id,
-                    "active",
+                    evidence_id,
+                    actor,
+                    surface,
+                    reason,
+                    key,
                     utc_now(),
                 ),
             )
+            row = conn.execute(
+                "SELECT * FROM memory_relation_events_v4 "
+                "WHERE relation_event_id=?",
+                (event_id,),
+            ).fetchone()
+        status = "retracted" if event_type == "retract" else (
+            "asserted" if sequence == 1 or latest["event_type"] == "retract"
+            else "reweighted"
+        )
+        return {**dict(row), "status": status}
+
+    @staticmethod
+    def _relation_key(from_record_id: str, to_record_id: str, relation_type: str) -> str:
+        return "relation:" + hash_payload(
+            [from_record_id, to_record_id, relation_type]
+        )[:32]
+
+    def _backfill_relation_events(self, conn: sqlite3.Connection) -> None:
+        """Carry mutable v3 relation rows into the v4 event stream once."""
+
+        if not self._table_exists(conn, "memory_relations_v3"):
+            return
+        rows = conn.execute(
+            "SELECT * FROM memory_relations_v3 ORDER BY created_at,relation_id"
+        ).fetchall()
+        for row in rows:
+            exists = conn.execute(
+                "SELECT 1 FROM memory_relation_events_v4 "
+                "WHERE from_record_id=? AND to_record_id=? AND relation_type=?",
+                (row["from_record_id"], row["to_record_id"], row["relation_type"]),
+            ).fetchone()
+            if exists:
+                continue
+            events = [("assert", float(row["weight"]))]
+            if row["status"] != "active":
+                events.append(("retract", 0.0))
+            for sequence, (event_type, weight) in enumerate(events, start=1):
+                key = f"migrate-v3:{row['relation_id']}:{event_type}"
+                conn.execute(
+                    "INSERT INTO memory_relation_events_v4("
+                    "relation_event_id,relation_id,from_record_id,to_record_id,"
+                    "relation_type,sequence_number,event_type,weight,"
+                    "source_revision_id,evidence_id,actor,surface,reason,"
+                    "idempotency_key,created_at"
+                    ") VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?,?,?,?)",
+                    (
+                        "relation-event:" + hashlib.sha256(
+                            key.encode("utf-8")
+                        ).hexdigest()[:32],
+                        row["relation_id"],
+                        row["from_record_id"],
+                        row["to_record_id"],
+                        row["relation_type"],
+                        sequence,
+                        event_type,
+                        weight,
+                        row["source_revision_id"],
+                        "memory-core-migration",
+                        "migration",
+                        "carried from mutable v3 relation row",
+                        key,
+                        row["created_at"],
+                    ),
+                )
 
     def record_access(
         self,
@@ -681,7 +919,11 @@ class MemoryStore:
         retrieval_reason: str,
         rank: int,
         surface: str,
+        gain: float = 0.01,
     ) -> None:
+        gain = float(gain)
+        if not 0.0 <= gain <= 1.0:
+            raise ValueError("access gain must be between 0 and 1")
         self.initialize()
         with self.connect() as conn:
             owner = conn.execute(
@@ -708,10 +950,10 @@ class MemoryStore:
             )
             conn.execute(
                 "UPDATE memory_telemetry_v3 "
-                "SET accessibility=MIN(1.0,accessibility+0.01),"
+                "SET accessibility=MIN(1.0,accessibility+?),"
                 "access_count=access_count+1,last_accessed_at=?,updated_at=? "
                 "WHERE revision_id=?",
-                (now, now, revision_id),
+                (gain, now, now, revision_id),
             )
 
     def apply_maintenance(

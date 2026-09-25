@@ -31,7 +31,24 @@ class CueDrivenRetriever:
         token_budget: int = 1800,
         include_history: bool | None = None,
         track_access: bool = True,
+        min_accessibility: float | None = None,
+        wake_on_direct_cue: bool = True,
+        wake_relation_types: tuple[str, ...] = (),
+        access_gain: float = 0.01,
     ) -> list[MemoryHit]:
+        """Rank current revisions for a cue.
+
+        Dormancy is opt-in. With ``min_accessibility`` set, a revision whose
+        accessibility is below it is dormant: lexical overlap and ordinary
+        graph spread skip it. Bootstrap records never go dormant. A dormant
+        revision wakes on a direct cue (``wake_on_direct_cue``) or when it is
+        reached through one of ``wake_relation_types``. Dormancy only changes
+        selection; it never changes meaning or telemetry.
+        """
+
+        if min_accessibility is not None and not 0.0 <= min_accessibility <= 1.0:
+            raise ValueError("min_accessibility must be between 0 and 1")
+        wake_types = {str(item) for item in wake_relation_types}
         normalized = normalize_text(query)
         query_tokens = set(tokens(query))
         revisions = {
@@ -44,9 +61,33 @@ class CueDrivenRetriever:
         scores = {record_id: 0.0 for record_id in revisions}
         reasons = {record_id: [] for record_id in revisions}
         direct: set[str] = set()
+        bootstrap = set(self.profile.bootstrap_record_ids)
+        dormant: set[str] = (
+            {
+                record_id
+                for record_id, revision in revisions.items()
+                if record_id not in bootstrap
+                and float(revision["accessibility"]) < min_accessibility
+            }
+            if min_accessibility is not None
+            else set()
+        )
 
-        cues = self.store.cue_rows(self.profile.name, scope)
+        def wake(record_id: str, why: str) -> None:
+            dormant.discard(record_id)
+            reasons[record_id].append(f"woke:{why}")
+
+        stored_cues = self.store.cue_rows(self.profile.name, scope)
         relations = self.store.active_relation_rows()
+        cues: list[dict] = [
+            {
+                **row,
+                # Recompute from the raw cue so rows written under an older
+                # normalizer still match text-norm/v2 queries.
+                "cue_norm": normalize_text(row["cue"]),
+            }
+            for row in stored_cues
+        ]
         cues.extend(
             {
                 "cue": cue,
@@ -56,9 +97,18 @@ class CueDrivenRetriever:
             }
             for cue, target, weight in self.profile.cue_aliases
         )
+        strongest: dict[tuple[str, str], dict] = {}
         for cue in cues:
+            key = (cue["cue_norm"], cue["target_record_id"])
+            if key not in strongest or float(cue["weight"]) > float(
+                strongest[key]["weight"]
+            ):
+                strongest[key] = cue
+        for cue in strongest.values():
             target = cue["target_record_id"]
             if target not in revisions:
+                continue
+            if target in dormant and not wake_on_direct_cue:
                 continue
             cue_tokens = set(tokens(cue["cue_norm"]))
             exact = bool(cue["cue_norm"] and cue["cue_norm"] in normalized)
@@ -67,11 +117,15 @@ class CueDrivenRetriever:
                 gain = float(cue["weight"]) * (
                     1.45 if exact else 0.9 * overlap
                 )
+                if target in dormant:
+                    wake(target, "direct-cue")
                 scores[target] += gain
                 reasons[target].append(f"cue:{cue['cue']}")
                 direct.add(target)
 
         for record_id, revision in revisions.items():
+            if record_id in dormant:
+                continue
             memory_tokens = set(
                 tokens(
                     "\n".join(
@@ -109,6 +163,10 @@ class CueDrivenRetriever:
                         continue
                     if target not in revisions:
                         continue
+                    if target in dormant:
+                        if relation["relation_type"] not in wake_types:
+                            continue
+                        wake(target, f"relation:{relation['relation_type']}")
                     gain = activation * float(relation["weight"]) * (0.46**depth)
                     if gain < 0.05:
                         continue
@@ -123,7 +181,7 @@ class CueDrivenRetriever:
             frontier = next_frontier
 
         for record_id, revision in revisions.items():
-            if scores[record_id] <= 0:
+            if scores[record_id] <= 0 or record_id in dormant:
                 continue
             scores[record_id] += float(revision["confidence"]) * 0.28
             scores[record_id] += float(revision["salience"]) * 0.14
@@ -133,7 +191,7 @@ class CueDrivenRetriever:
         ranked = [
             MemoryHit(revisions[record_id], score, reasons[record_id])
             for record_id, score in scores.items()
-            if score >= 0.24
+            if score >= 0.24 and record_id not in dormant
         ]
         ranked.sort(key=lambda item: (-item.score, item.revision["record_id"]))
         wants_history = (
@@ -176,5 +234,6 @@ class CueDrivenRetriever:
                     retrieval_reason=",".join(hit.reasons[:5]),
                     rank=len(selected),
                     surface=surface,
+                    gain=access_gain,
                 )
         return selected

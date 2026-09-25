@@ -11,6 +11,7 @@ from .packet import (
 from .profile import MemoryProfile
 from .retrieval import CueDrivenRetriever, MemoryHit
 from .runtime import MemoryRuntime
+from .text import TEXT_NORMALIZER_VERSION
 from .vho import (
     VHO_PRINCIPLES,
     VHO_ORIGINAL_ATTACHMENT_SHA256,
@@ -23,6 +24,7 @@ from .vho import (
 from .store import (
     APPLICATION_ID,
     EVIDENCE_IDENTITY_VERSION,
+    LEGACY_V3_VERSION,
     SCHEMA_VERSION,
     MemoryStore,
     MigrationRequiredError,
@@ -46,6 +48,8 @@ __all__ = [
     "SchemaVersionError",
     "APPLICATION_ID",
     "SCHEMA_VERSION",
+    "LEGACY_V3_VERSION",
+    "TEXT_NORMALIZER_VERSION",
     "EVIDENCE_IDENTITY_VERSION",
     "ValidatedIntake",
     "evaluate_cue_contract",
