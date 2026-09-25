@@ -205,6 +205,10 @@ python3 -W error::ResourceWarning -m pytest -q
 python3 -m pip wheel . --no-deps
 ```
 
+CI runs the same checks on Linux, macOS and Windows with Python 3.10 and 3.13
+(`.github/workflows/tests.yml`). The kernel uses only the standard library and
+SQLite; database paths are supplied by the host.
+
 The test suite includes an explicit boundary check that prevents consumer
 identity or private seeds from entering the reusable kernel.
 
