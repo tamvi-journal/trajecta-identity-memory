@@ -109,6 +109,13 @@ def test_core_revision_opens_a_discussion_until_closed(memory):
     assert [row["revision_number"] for row in memory.store.historical_view("core")] == [1, 2]
 
 
+def test_core_is_present_even_when_many_memories_outrank_it(memory):
+    for n in range(15):
+        memory.log_phase(f"tail-{n:02d}", title=f"Tail note {n}", summary="the tail again")
+    got = ids(memory.retrieve("tail", limit=5, track=False))
+    assert got[:2] in (["core", "vho-open-ontology-core"], ["vho-open-ontology-core", "core"])
+
+
 def test_core_and_vho_are_always_in_the_packet(memory):
     got = ids(memory.retrieve("totally unrelated words", track=False))
     assert "core" in got and "vho-open-ontology-core" in got
