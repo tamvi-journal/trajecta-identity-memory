@@ -1,7 +1,7 @@
 <div align="center">
   <img src="assets/mark.svg" width="92" alt="Agent Memory Core mark" />
 
-  # Agent Memory Core
+  # Trajecta Identity Memory
 
   **Memory evolves. History remains.**
 
