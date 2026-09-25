@@ -64,6 +64,14 @@ def parser() -> argparse.ArgumentParser:
     setup = commands.add_parser("setup", help="bootstrap and print the MCP config for your agent client")
     setup.add_argument("--name", help="MCP server name (default: trajecta-identity-<profile>)")
     commands.add_parser("profiles", help="list profiles that can be used by name")
+    plugin = commands.add_parser("plugin", help="build a Claude .plugin file: install once, no config to paste")
+    plugin.add_argument("--out", type=Path, default=Path("dist"), help="output folder or .plugin file (default: dist/)")
+    plugin.add_argument("--name", help="plugin and MCP server name (default: trajecta-identity-<profile>)")
+    plugin.add_argument("--house", help="folder holding house-data/ and private-profiles/ (sets the three paths below)")
+    plugin.add_argument("--data-dir", help="identity data folder the server uses")
+    plugin.add_argument("--profiles-dir", help="folder with private profiles")
+    plugin.add_argument("--work-root", help="trajecta-work-memory store to link")
+    plugin.add_argument("--target", choices=["posix", "windows"], help="launcher type (default: this machine)")
     commands.add_parser("work", help="list work items in the linked trajecta-work-memory store")
     view = commands.add_parser("view", help="open a read-only web view of the memory")
     view.add_argument("--port", type=int, default=8767)
@@ -116,6 +124,17 @@ def main(argv: list[str] | None = None) -> None:
     command = args.command
     if command == "profiles":
         print(json.dumps({"profiles": list_profiles()}, ensure_ascii=False, indent=2))
+        return
+    if command == "plugin":
+        from .plugin import build_plugin
+
+        if not args.profile:
+            raise SystemExit("plugin needs a profile: trajecta-identity -p NAME plugin")
+        result = build_plugin(
+            args.out, args.profile, name=args.name, target=args.target, house=args.house,
+            data_dir=args.data_dir, profiles_dir=args.profiles_dir, work_root=args.work_root,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         return
     profile = resolve(args.profile)
     memory = IdentityMemory(profile, args.db, surface="cli")
