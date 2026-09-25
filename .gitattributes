@@ -1,0 +1,3 @@
+# LF everywhere; PowerShell scripts keep CRLF for Windows.
+* text=auto eol=lf
+*.ps1 text eol=crlf
