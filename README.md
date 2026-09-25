@@ -35,6 +35,20 @@ folder, a `.json` file, or a URL. The last one you used is remembered. See
 From a checkout: `install/install.sh example` (Windows:
 `install\install.ps1 -AgentProfile example`).
 
+### As a Claude plugin (nothing to paste)
+
+```bash
+trajecta-identity -p example plugin --out dist/
+# or, with data kept elsewhere:
+trajecta-identity -p aux plugin --house ~/my-house --out dist/
+```
+
+This writes `dist/trajecta-identity-<profile>.plugin`. Install it once in
+Claude and the memory server starts with Claude from then on. The plugin
+carries its own copy of the code and a launcher in `scripts/` that finds
+Python 3.10+ by itself. `--target windows` builds a Python launcher instead of
+a shell one. Rebuild after pulling a new version.
+
 ## Two memories
 
 An agent needs two kinds of memory:
