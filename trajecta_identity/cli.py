@@ -64,6 +64,7 @@ def parser() -> argparse.ArgumentParser:
     setup = commands.add_parser("setup", help="bootstrap and print the MCP config for your agent client")
     setup.add_argument("--name", help="MCP server name (default: trajecta-identity-<profile>)")
     commands.add_parser("profiles", help="list profiles that can be used by name")
+    commands.add_parser("work", help="list work items in the linked trajecta-work-memory store")
     view = commands.add_parser("view", help="open a read-only web view of the memory")
     view.add_argument("--port", type=int, default=8767)
     view.add_argument("--no-browser", action="store_true")
@@ -122,6 +123,10 @@ def main(argv: list[str] | None = None) -> None:
         memory.bootstrap()  # idempotent; a fresh machine works without a separate init
     if command == "init":
         result = memory.bootstrap()
+    elif command == "work":
+        if memory.work is None:
+            raise SystemExit("no work store: set TRAJECTA_WORK_ROOT or work_root in the profile")
+        result = {"work_store": str(memory.work.root), "work": memory.work.work_items()}
     elif command == "view":
         from .view import serve
 

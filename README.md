@@ -44,7 +44,12 @@ An agent needs two kinds of memory:
 | **Identity** | Who am I, how do I recognize myself, what phases have I been through? | **this repo** |
 | **Work** | What are we doing, what changed, where do we resume? | [`trajecta-work-memory`](https://github.com/tamvi-journal/trajecta-work-memory) |
 
-Identity points to work (`work_refs`) and never copies it.
+Identity points to work (`work_refs`) and never copies it. Set
+`TRAJECTA_WORK_ROOT` (or `work_root` in a profile) to a trajecta-work-memory
+store, and identity will check that each ref exists and show the referenced
+work (topic, status, next action) next to the memories that point to it. The
+bridge is read-only: identity never writes to work. `trajecta-identity work`
+lists the work items it can see.
 
 ## What is inside
 

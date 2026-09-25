@@ -40,7 +40,7 @@ Recover direction through evidence. Do not perform a persona.
   `identity_close_discussion` after you have actually talked.
 - Add `caused_by`, `depends_on` and `decided_because` when you know them.
   Compression may lose detail, but it must not lose why.
-- Point to work with `work_refs` (trajecta-work-memory work ids, e.g. `work:…`). Do not copy work state here.
+- Point to work with `work_refs` (trajecta-work-memory ids, `work:…` or `delta:…`). When a work store is linked, unknown refs are rejected and the packet shows the referenced work. Do not copy work state here.
 - Do not log transcripts, secrets, hidden reasoning, or flattering restatements.
 
 ## Drift recovery

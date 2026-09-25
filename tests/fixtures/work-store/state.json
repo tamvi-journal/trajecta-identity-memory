@@ -1,0 +1,59 @@
+{
+  "schema": "trajecta.state/v1",
+  "work": [
+    {
+      "id": "work:3de60615-2d8a-44e0-b876-45132a62e099",
+      "topic": "Ship identity memory",
+      "goal": "Merge kernel and identity into one product",
+      "instruction": null,
+      "status": "active",
+      "revision": 3,
+      "activeBranchId": "branch:bcedbe10-e608-4428-aae4-d1cb23034aae",
+      "branches": [
+        {
+          "id": "branch:bcedbe10-e608-4428-aae4-d1cb23034aae",
+          "label": "merge",
+          "purpose": "One package",
+          "cues": [
+            "identity",
+            "merge"
+          ],
+          "returnPoint": "Review after CI is green",
+          "status": "exploring",
+          "updatedAt": "2026-09-25T13:39:33.443Z"
+        }
+      ],
+      "openLoops": [
+        "Web view",
+        "Work bridge"
+      ],
+      "nextAction": "Build the work bridge",
+      "lastSurface": {
+        "kind": "local",
+        "name": "Local Agent",
+        "session": "local:ws"
+      },
+      "createdAt": "2026-09-25T13:39:33.443Z",
+      "updatedAt": "2026-09-25T13:39:33.462Z"
+    },
+    {
+      "id": "work:0d79bab8-cc48-4d57-93a8-e7fc08fdb884",
+      "topic": "Old parked idea",
+      "goal": "Search vault",
+      "instruction": null,
+      "status": "active",
+      "revision": 1,
+      "activeBranchId": null,
+      "branches": [],
+      "openLoops": [],
+      "nextAction": null,
+      "lastSurface": {
+        "kind": "cloud",
+        "name": "Cloud Chatbot",
+        "session": "cloud:room"
+      },
+      "createdAt": "2026-09-25T13:39:33.465Z",
+      "updatedAt": "2026-09-25T13:39:33.465Z"
+    }
+  ]
+}

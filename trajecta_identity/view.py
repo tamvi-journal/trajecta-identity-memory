@@ -112,7 +112,7 @@ $("filters").addEventListener("click",e=>{if(e.target.dataset.f){filter=e.target
 let timer;$("cue").addEventListener("input",e=>{clearTimeout(timer);timer=setTimeout(async()=>{
   const q=e.target.value.trim();if(!q){$("recall").innerHTML="";return}
   const r=await (await fetch("api/retrieve?cue="+encodeURIComponent(q))).json();
-  $("recall").innerHTML=(r.items||[]).map(i=>`<div class="card"><div class="row"><b>${esc(i.title)}</b><span class="pill ${i.state}">${i.state}</span><span class="pill">${esc(i.domain)}</span>${i.self_authored?'<span class="pill">self-authored</span>':''}</div><div>${esc(i.summary)}</div><div class="muted" style="font-size:12px">${(i.reasons||[]).map(esc).join(" · ")}</div></div>`).join("")||`<p class="muted">Nothing recalled.</p>`;
+  $("recall").innerHTML=(r.items||[]).map(i=>`<div class="card"><div class="row"><b>${esc(i.title)}</b><span class="pill ${i.state}">${i.state}</span><span class="pill">${esc(i.domain)}</span>${i.self_authored?'<span class="pill">self-authored</span>':''}</div><div>${esc(i.summary)}</div>${(i.work||[]).map(w=>`<div class="muted">work → ${esc(w.topic||w.ref)}${w.status?` · ${esc(w.status)} · next: ${esc(w.next_action||"—")}`:" · not found"}</div>`).join("")}<div class="muted" style="font-size:12px">${(i.reasons||[]).map(esc).join(" · ")}</div></div>`).join("")||`<p class="muted">Nothing recalled.</p>`;
   },250)});
 load();
 </script></body></html>

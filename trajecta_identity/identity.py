@@ -27,6 +27,7 @@ from memory_core import (
 
 from .activation import ActivationPolicy, apply_recall, run_decay, state_of
 from .paths import profile_db
+from .work import WorkStore, refs_in
 from .profile import (
     CORE_ID,
     DISCUSSION_ANCHOR,
@@ -97,6 +98,7 @@ class IdentityMemory:
             governance=SELF_AUTHORED_POLICY,
         )
         self.store = self.runtime.store
+        self.work = WorkStore.from_config(profile.extra)
 
     # ------------------------------------------------------------------ setup
 
@@ -191,6 +193,11 @@ class IdentityMemory:
         links = self._require_existing(
             {"later-phase-of": follows, "caused-by": caused_by, "depends-on": depends_on}
         )
+        work_refs = [str(ref).strip() for ref in work_refs if str(ref).strip()]
+        if work_refs and self.work is not None:
+            missing = self.work.missing(work_refs)
+            if missing:
+                raise ValueError("unknown work refs in trajecta-work-memory: " + ", ".join(missing))
         body = self._compose(content, decided_because, work_refs, phase_context, occurred_at)
         result = self._submit(
             operation_type="create",
@@ -428,6 +435,7 @@ class IdentityMemory:
                 "state": state_of(revision, self.activation, PINNED),
                 "self_authored": self_authored,
                 "reasons": hit.reasons[:6],
+                "work": self._linked_work(revision.get("content", "")),
             })
         return {
             "schema": "trajecta-identity-packet/v1",
@@ -504,7 +512,15 @@ class IdentityMemory:
             "activation": states,
             "open_discussions": len(self.open_discussions()) if rows else 0,
             "open_loops": len(self.open_loops()) if rows else 0,
+            "work_store": str(self.work.root) if self.work else None,
         }
+
+    def _linked_work(self, content: str) -> list[dict[str, Any]]:
+        linked = []
+        for ref in refs_in(content):
+            resolved = self.work.resolve(ref) if self.work is not None else None
+            linked.append(resolved if resolved else {"ref": ref, "resolved": False})
+        return linked
 
     def decay(self, now: str | None = None) -> dict[str, Any]:
         return run_decay(self.store, self.activation, pinned=PINNED, now=now)
