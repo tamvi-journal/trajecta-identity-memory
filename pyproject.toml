@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Self-authored identity memory for agents, built on agent-memory-core."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
 dependencies = [
     # Pinned by commit: kernel changes only reach this product when the pin moves.
     "agent-memory-core @ git+https://github.com/tamvi-journal/agent-memory-core@feeaa59ab0b33ffea4c23e56cd333cafb5ccba39",
