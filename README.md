@@ -20,14 +20,20 @@
 ## Quick start
 
 ```bash
-git clone https://github.com/tamvi-journal/trajecta-identity-memory.git
-cd trajecta-identity-memory
-install/install.sh example          # Windows: install\install.ps1 -AgentProfile example
+pipx install git+https://github.com/tamvi-journal/trajecta-identity-memory
+trajecta-identity -p example setup
 ```
 
-The installer prints an MCP config block. Paste it into your agent client
-(Claude, Codex, Cursor…). From then on the agent can recall who it is and log
-its own phases.
+`setup` bootstraps the profile and prints an MCP config block. Paste it into
+your agent client (Claude, Codex, Cursor…). From then on the agent can recall
+who it is and log its own phases.
+
+A profile can be a bundled name (`example`, `companion`, `researcher`), a
+folder, a `.json` file, or a URL. The last one you used is remembered. See
+[writing a profile](trajecta_identity/profiles/SETUP.md).
+
+From a checkout: `install/install.sh example` (Windows:
+`install\install.ps1 -AgentProfile example`).
 
 ## Two memories
 
@@ -87,9 +93,11 @@ use them is [`skills/identity-continuity`](skills/identity-continuity/SKILL.md).
 
 A profile is the agent's seed: its name, its owner, and its core.
 
-- `example` is bundled and works immediately.
+- `example`, `companion` and `researcher` are bundled and work immediately.
+  `trajecta-identity profiles` lists what is available.
 - To write your own, copy `trajecta_identity/profiles/_template/`. The template
   refuses to load until the core is filled in, **in the agent's own words**.
+  See [SETUP.md](trajecta_identity/profiles/SETUP.md).
 - Keep private profiles outside the repo, in `$TRAJECTA_IDENTITY_PROFILES` or
   `<data dir>/profiles/`.
 

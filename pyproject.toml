@@ -35,7 +35,7 @@ include = ["memory_core*", "trajecta_identity*"]
 
 [tool.setuptools.package-data]
 memory_core = ["schema.sql"]
-trajecta_identity = ["profiles/*/profile.json"]
+trajecta_identity = ["profiles/*/profile.json", "profiles/SETUP.md"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import traceback
 from pathlib import Path
@@ -13,7 +12,8 @@ from typing import Any
 from . import __version__
 from .identity import IdentityMemory
 from .paths import utf8_stdio
-from .profile import VHO_KEYS, load_profile
+from .profile import VHO_KEYS
+from .recipe import resolve
 
 _STR = {"type": "string"}
 _IDS = {"type": "array", "items": _STR, "maxItems": 20}
@@ -219,11 +219,13 @@ class IdentityServer:
 
 def main(argv: list[str] | None = None) -> None:
     args_parser = argparse.ArgumentParser(prog="trajecta-identity-mcp")
-    args_parser.add_argument("--profile", default=os.environ.get("TRAJECTA_IDENTITY_PROFILE", "example"))
+    args_parser.add_argument("--profile", help="profile name, folder, .json file or URL (default: last used)")
     args_parser.add_argument("--db", type=Path)
     utf8_stdio()
     args = args_parser.parse_args(argv)
-    server = IdentityServer(IdentityMemory(load_profile(args.profile), args.db, surface="mcp"))
+    server = IdentityServer(
+        IdentityMemory(resolve(args.profile, remember_choice=False), args.db, surface="mcp")
+    )
     for line in sys.stdin:
         line = line.strip()
         if not line:

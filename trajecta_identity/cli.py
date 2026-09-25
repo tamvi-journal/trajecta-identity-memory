@@ -7,19 +7,63 @@ from pathlib import Path
 
 from .identity import IdentityMemory
 from .paths import utf8_stdio
-from .profile import load_profile
+from .paths import profile_search_dirs
+from .recipe import resolve
 
 
 def _list(value: str | None) -> list[str]:
     return [item.strip() for item in (value or "").split(",") if item.strip()]
 
 
+def list_profiles() -> list[dict[str, str]]:
+    seen: dict[str, dict[str, str]] = {}
+    for folder in profile_search_dirs():
+        if not folder.is_dir():
+            continue
+        for child in sorted(folder.iterdir()):
+            manifest = child / "profile.json"
+            if child.name.startswith("_") or not manifest.is_file():
+                continue
+            try:
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            name = str(data.get("name", child.name))
+            seen.setdefault(name, {
+                "name": name,
+                "agent": str(data.get("agent", name)),
+                "summary": str((data.get("core") or {}).get("summary", ""))[:160],
+                "path": str(child),
+            })
+    return list(seen.values())
+
+
+def setup_config(profile: str, db: Path | None, server_name: str | None) -> dict:
+    args = ["-m", "trajecta_identity.mcp_server", "--profile", profile]
+    if db:
+        args += ["--db", str(Path(db).expanduser().resolve())]
+    return {
+        "mcpServers": {
+            server_name or f"trajecta-identity-{profile}": {
+                "command": sys.executable,
+                "args": args,
+            }
+        }
+    }
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="trajecta-identity", description="Trajecta Identity Memory")
-    root.add_argument("--profile", default="example", help="profile name in profiles/ or a profile folder")
+    root.add_argument(
+        "-p", "--profile",
+        help="profile name, folder, .json file or http(s) URL (default: last used, then 'example')",
+    )
     root.add_argument("--db", type=Path, help="override the database path")
     commands = root.add_subparsers(dest="command", required=True)
     commands.add_parser("init", help="bootstrap anchors, VHO and the core")
+    setup = commands.add_parser("setup", help="bootstrap and print the MCP config for your agent client")
+    setup.add_argument("--name", help="MCP server name (default: trajecta-identity-<profile>)")
+    commands.add_parser("profiles", help="list profiles that can be used by name")
     commands.add_parser("status")
     retrieve = commands.add_parser("retrieve")
     retrieve.add_argument("cue")
@@ -65,12 +109,26 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     utf8_stdio()
     args = parser().parse_args(argv)
-    memory = IdentityMemory(load_profile(args.profile), args.db, surface="cli")
     command = args.command
+    if command == "profiles":
+        print(json.dumps({"profiles": list_profiles()}, ensure_ascii=False, indent=2))
+        return
+    profile = resolve(args.profile)
+    memory = IdentityMemory(profile, args.db, surface="cli")
     if command != "init":
         memory.bootstrap()  # idempotent; a fresh machine works without a separate init
     if command == "init":
         result = memory.bootstrap()
+    elif command == "setup":
+        result = setup_config(profile.name, args.db, args.name)
+        memory.bootstrap()
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        print(
+            "\nPaste this into your agent client's MCP config "
+            "(Claude Desktop: Settings → Developer → Edit Config).",
+            file=sys.stderr,
+        )
+        return
     elif command == "status":
         result = memory.status()
     elif command == "retrieve":

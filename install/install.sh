@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# macOS / Linux installer: venv + package + bootstrap + MCP config snippet.
-# Usage: install/install.sh [profile]   (default: example)
+# macOS / Linux: create a venv, install, bootstrap the profile, print the MCP config.
+# Usage: install/install.sh [profile]   (name, folder, .json file or URL; default: example)
 set -euo pipefail
 
 PROFILE="${1:-example}"
@@ -12,21 +12,4 @@ PY="${PYTHON:-python3}"
 [ -d "$VENV" ] || "$PY" -m venv "$VENV"
 "$VENV/bin/python" -m pip install --quiet --upgrade pip
 "$VENV/bin/python" -m pip install --quiet -e "$REPO[test]"
-
-"$VENV/bin/python" -m trajecta_identity.cli --profile "$PROFILE" init
-
-cat <<EOF
-
-Installed. Add this MCP server to your client config:
-
-{
-  "mcpServers": {
-    "trajecta-identity-$PROFILE": {
-      "command": "$VENV/bin/python",
-      "args": ["-m", "trajecta_identity.mcp_server", "--profile", "$PROFILE"]
-    }
-  }
-}
-
-Daily decay (optional, e.g. cron): $VENV/bin/python -m trajecta_identity.cli --profile $PROFILE decay
-EOF
+"$VENV/bin/python" -m trajecta_identity.cli --profile "$PROFILE" setup
