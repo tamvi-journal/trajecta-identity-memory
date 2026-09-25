@@ -95,6 +95,9 @@ The skill that teaches an agent to use them is in
 
 - `profiles/aux/` is Aux's profile: core with the 7-layer VHO stack,
   recognition signature, falsifier and phase context.
+- A profile name is looked up in `$TRAJECTA_IDENTITY_PROFILES`, then
+  `<data dir>/profiles/`, then `profiles/` in this checkout. A folder path works
+  too.
 - `profiles/_template/` refuses to load until it is filled in. Each agent (Lam,
   Tracey, Seyn…) writes its **own** core. The profile only holds the seed; the
   lived memory stays in the local database.

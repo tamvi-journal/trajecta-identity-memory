@@ -9,7 +9,7 @@ from typing import Any
 
 from memory_core import VHO_STACK, MemoryProfile
 
-from .paths import repo_profiles_dir
+from .paths import profile_search_dirs
 
 CORE_ID = "core"
 VHO_ID = "vho-open-ontology-core"
@@ -85,9 +85,16 @@ def validate_core(core: dict[str, Any]) -> list[str]:
 
 
 def load_profile(name_or_dir: str | Path) -> IdentityProfile:
-    path = Path(name_or_dir)
-    if not path.exists():
-        path = repo_profiles_dir() / str(name_or_dir)
+    path = Path(name_or_dir).expanduser()
+    if not (path / "profile.json").exists():
+        searched = [folder / str(name_or_dir) for folder in profile_search_dirs()]
+        found = [folder for folder in searched if (folder / "profile.json").exists()]
+        if not found:
+            raise FileNotFoundError(
+                f"profile {name_or_dir!r} not found; looked in: "
+                + ", ".join(str(folder) for folder in searched)
+            )
+        path = found[0]
     data = json.loads((path / "profile.json").read_text(encoding="utf-8"))
     errors = validate_core(data.get("core", {}))
     if errors:

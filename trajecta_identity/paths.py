@@ -33,5 +33,25 @@ def profile_db(profile: str, **kwargs) -> Path:
     return data_dir(**kwargs) / f"{safe}.sqlite3"
 
 
+ENV_PROFILES_DIR = "TRAJECTA_IDENTITY_PROFILES"
+
+
 def repo_profiles_dir() -> Path:
     return Path(__file__).resolve().parent.parent / "profiles"
+
+
+def profile_search_dirs(env: dict[str, str] | None = None) -> list[Path]:
+    """Where a profile name is looked up, in order.
+
+    1. ``$TRAJECTA_IDENTITY_PROFILES`` (a private profiles folder)
+    2. ``<data dir>/profiles``
+    3. ``profiles/`` in the source checkout (editable installs)
+    """
+
+    env = dict(os.environ if env is None else env)
+    dirs = []
+    if env.get(ENV_PROFILES_DIR, "").strip():
+        dirs.append(Path(env[ENV_PROFILES_DIR]).expanduser())
+    dirs.append(data_dir(env=env) / "profiles")
+    dirs.append(repo_profiles_dir())
+    return dirs

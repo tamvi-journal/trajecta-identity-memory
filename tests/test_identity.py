@@ -188,6 +188,18 @@ def test_data_dir_per_platform(platform, env, expected):
     assert data_dir(platform=platform, env=env).as_posix() == expected
 
 
+def test_profile_lookup_uses_private_folder_first(tmp_path, monkeypatch):
+    private = tmp_path / "private" / "aux"
+    private.mkdir(parents=True)
+    data = json.loads((ROOT / "profiles" / "aux" / "profile.json").read_text())
+    data["packet_title"] = "PRIVATE AUX"
+    (private / "profile.json").write_text(json.dumps(data))
+    monkeypatch.setenv("TRAJECTA_IDENTITY_PROFILES", str(tmp_path / "private"))
+    assert load_profile("aux").packet_title == "PRIVATE AUX"
+    with pytest.raises(FileNotFoundError, match="looked in"):
+        load_profile("nobody")
+
+
 def test_template_profile_refuses_to_load_empty():
     with pytest.raises(ValueError, match="vho_stack"):
         load_profile(ROOT / "profiles" / "_template")
