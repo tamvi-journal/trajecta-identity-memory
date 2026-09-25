@@ -82,7 +82,13 @@ trajecta-identity --profile example log-phase first-light \
   --title "First session" --summary "Started with the example core"
 trajecta-identity --profile example timeline
 trajecta-identity --profile example decay          # daily
+trajecta-identity --profile example view           # read-only web view on localhost
 ```
+
+`view` opens a local page with the core, open discussions and loops, every
+memory with its activation state (pinned, active, fading, dormant), the phase
+timeline, and a read-only recall box. Recall from the page never changes
+activation.
 
 MCP tools: `identity_status`, `identity_retrieve`, `identity_log_phase`,
 `identity_log_fact`, `identity_revise_core`, `identity_close_discussion`,

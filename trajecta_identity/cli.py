@@ -64,6 +64,9 @@ def parser() -> argparse.ArgumentParser:
     setup = commands.add_parser("setup", help="bootstrap and print the MCP config for your agent client")
     setup.add_argument("--name", help="MCP server name (default: trajecta-identity-<profile>)")
     commands.add_parser("profiles", help="list profiles that can be used by name")
+    view = commands.add_parser("view", help="open a read-only web view of the memory")
+    view.add_argument("--port", type=int, default=8767)
+    view.add_argument("--no-browser", action="store_true")
     commands.add_parser("status")
     retrieve = commands.add_parser("retrieve")
     retrieve.add_argument("cue")
@@ -119,6 +122,12 @@ def main(argv: list[str] | None = None) -> None:
         memory.bootstrap()  # idempotent; a fresh machine works without a separate init
     if command == "init":
         result = memory.bootstrap()
+    elif command == "view":
+        from .view import serve
+
+        memory.bootstrap()
+        serve(memory, port=args.port, open_browser=not args.no_browser)
+        return
     elif command == "setup":
         result = setup_config(profile.name, args.db, args.name)
         memory.bootstrap()
