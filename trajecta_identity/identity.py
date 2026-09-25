@@ -585,7 +585,7 @@ class IdentityMemory:
             parts.append(f"Decided because: {decided_because}")
         refs = [ref for ref in work_refs if str(ref).strip()]
         if refs:
-            parts.append("Work refs (AWM): " + ", ".join(refs))
+            parts.append("Work refs (trajecta-memory): " + ", ".join(refs))
         if phase_context:
             parts.append("Phase context: " + json.dumps(phase_context, ensure_ascii=False, sort_keys=True))
         if occurred_at:

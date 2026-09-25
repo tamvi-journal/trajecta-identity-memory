@@ -9,7 +9,7 @@ Part of the Trajecta family:
 | Layer | Owns |
 |---|---|
 | `agent-memory-core` | revisions, evidence, lifecycle, relations, telemetry, retrieval |
-| `trajecta-memory` (AWM) | work: objectives, decisions, blockers, handoffs |
+| [`trajecta-memory`](https://github.com/tamvi-journal/trajecta-memory) | work: objectives, decisions, blockers, handoffs (shared backbone, also used by Hermes) |
 | **`trajecta-identity-memory`** | who the agent is: core, phases, recognition, activation |
 
 Identity points to work (`work_refs`) and never copies it. See
