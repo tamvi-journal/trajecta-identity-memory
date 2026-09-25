@@ -40,6 +40,13 @@ def import_aml(memory: IdentityMemory, aml_db: str | Path) -> dict[str, Any]:
             "ORDER BY COALESCE(occurred_at, created_at), id"
         ).fetchall()
         edges = conn.execute("SELECT src_id, dst_id, relation FROM memory_edges").fetchall()
+        aml_cues: dict[str, list[str]] = {}
+        has_cues = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_cues'"
+        ).fetchone()
+        if has_cues:
+            for row in conn.execute("SELECT cue, target_id FROM memory_cues"):
+                aml_cues.setdefault(row["target_id"], []).append(row["cue"])
     finally:
         conn.close()
 
@@ -66,7 +73,7 @@ def import_aml(memory: IdentityMemory, aml_db: str | Path) -> dict[str, Any]:
                 title=node["title"][:200],
                 summary=summary,
                 content=content,
-                cues=tags[:12],
+                cues=(aml_cues.get(node["id"], []) + tags)[:20],
                 source_ref=node["source_ref"] or f"aml:{node['id']}",
                 confidence=float(node["confidence"]),
                 occurred_at=node["occurred_at"] or node["created_at"],
@@ -79,7 +86,7 @@ def import_aml(memory: IdentityMemory, aml_db: str | Path) -> dict[str, Any]:
                 title=node["title"][:200],
                 summary=summary,
                 content=content,
-                cues=tags[:12],
+                cues=(aml_cues.get(node["id"], []) + tags)[:20],
                 source_ref=node["source_ref"] or f"aml:{node['id']}",
                 confidence=float(node["confidence"]),
                 evidence=[provenance],

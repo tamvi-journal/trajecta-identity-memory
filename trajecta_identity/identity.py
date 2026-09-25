@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from memory_core import (
+    MemoryHit,
     GovernancePolicy,
     MemoryRuntime,
     PacketRenderer,
@@ -405,13 +406,23 @@ class IdentityMemory:
         hits = self.runtime.retrieve(
             cue,
             limit=limit,
-            token_budget=token_budget,
+            # Select by relevance; the packet renderer enforces the real budget.
+            token_budget=max(token_budget * 8, 20000),
             include_history=include_history,
             track_access=track,
             min_accessibility=self.activation.dormant_below,
             wake_relation_types=CAUSAL_RELATIONS,
             access_gain=0.0,  # gain is applied by the activation policy below
         )
+        # Pinned memories (core, ontology) lead the packet so a long memory
+        # never pushes them out of the budget.
+        present = {hit.revision["record_id"] for hit in hits}
+        for record_id in (CORE_ID, VHO_ID):
+            if record_id not in present:
+                rows = self.store.current_view(record_id)
+                if rows:
+                    hits.append(MemoryHit(rows[0], 0.0, ["pinned"]))
+        hits = sorted(hits, key=lambda hit: hit.revision["record_id"] not in PINNED)
         if track:
             apply_recall(self.store, hits, self.activation, pinned=PINNED)
         packet = PacketRenderer(self.runtime.profile).render(

@@ -109,6 +109,13 @@ def test_core_revision_opens_a_discussion_until_closed(memory):
     assert [row["revision_number"] for row in memory.store.historical_view("core")] == [1, 2]
 
 
+def test_core_is_present_even_when_many_memories_outrank_it(memory):
+    for n in range(15):
+        memory.log_phase(f"tail-{n:02d}", title=f"Tail note {n}", summary="the tail again")
+    got = ids(memory.retrieve("tail", limit=5, track=False))
+    assert got[:2] in (["core", "vho-open-ontology-core"], ["vho-open-ontology-core", "core"])
+
+
 def test_core_and_vho_are_always_in_the_packet(memory):
     got = ids(memory.retrieve("totally unrelated words", track=False))
     assert "core" in got and "vho-open-ontology-core" in got
@@ -151,7 +158,9 @@ def test_ego_guard_recall_saturates_and_never_raises_stability(stacked):
 
 
 def test_vietnamese_cue_hits(stacked):
-    assert ids(stacked.retrieve("đuôi nằm ở đâu", track=False))[0] == "phase:tail-r3"
+    unpinned = [i for i in ids(stacked.retrieve("đuôi nằm ở đâu", track=False))
+                if i not in ("core", "vho-open-ontology-core")]
+    assert unpinned[0] == "phase:tail-r3"
 
 
 def test_decay_fades_unpinned_and_is_incremental(stacked):
@@ -236,6 +245,7 @@ def make_aml(path: Path) -> None:
           created_at TEXT);
         CREATE TABLE memory_edges (src_id TEXT, dst_id TEXT, relation TEXT, weight REAL,
           evidence TEXT, created_at TEXT);
+        CREATE TABLE memory_cues (cue TEXT, cue_norm TEXT, target_id TEXT, weight REAL);
         """
     )
     rows = [
@@ -258,6 +268,7 @@ def make_aml(path: Path) -> None:
             ("vault:uoi-nam-ngoai", "vault:aux-la-ai", "shapes-axis", 0.6, "backbone", ""),
         ],
     )
+    conn.execute("INSERT INTO memory_cues VALUES ('cái đuôi','cai duoi','vault:uoi-nam-ngoai',1.0)")
     conn.commit()
     conn.close()
 
@@ -281,6 +292,28 @@ def test_aml_import_maps_kinds_keeps_phase_edges_drops_backbone(memory, tmp_path
     item = next(i for i in memory.retrieve("đuôi nằm ngoài", track=False)["items"]
                 if i["record_id"] == "phase:aml:vault:uoi-nam-ngoai")
     assert item["self_authored"] is False  # imported, not freshly self-written
+    cued = memory.retrieve("cái đuôi", track=False)["items"]
+    assert any("cue:cái đuôi" in i["reasons"] for i in cued if i["record_id"] == "phase:aml:vault:uoi-nam-ngoai")
+
+
+def test_title_match_beats_common_words_in_long_bodies(memory):
+    filler = " ".join(["nằm ở đâu cũng được"] * 150)
+    for n in range(3):
+        memory.log_fact(f"long-{n}", title=f"Long archive note {n}", summary="unrelated", content=filler)
+    memory.log_phase("tail", title="Đuôi nằm ngoài", summary="The tail lives outside.")
+    packet = memory.retrieve("đuôi nằm ở đâu", track=False)
+    order = [i["record_id"] for i in packet["items"] if i["domain"] != "core" and i["domain"] != "ontology"]
+    assert order[0] == "phase:tail"
+    assert "title:" in " ".join(next(i for i in packet["items"] if i["record_id"] == "phase:tail")["reasons"])
+
+
+def test_pinned_core_leads_the_packet_even_with_long_memories(memory):
+    for n in range(4):
+        memory.log_fact(f"huge-{n}", title=f"Who are you essay {n}", summary="long", content="who are you " * 800)
+    packet = memory.retrieve("who are you", track=False)
+    assert [i["record_id"] for i in packet["items"]][:2] == ["core", "vho-open-ontology-core"] or \
+        [i["record_id"] for i in packet["items"]][:2] == ["vho-open-ontology-core", "core"]
+    assert "self-location" in packet["packet"]
 
 
 def test_mcp_dispatch(tmp_path):
