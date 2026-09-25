@@ -12,6 +12,7 @@ from typing import Any
 
 from . import __version__
 from .identity import IdentityMemory
+from .paths import utf8_stdio
 from .profile import VHO_KEYS, load_profile
 
 _STR = {"type": "string"}
@@ -220,6 +221,7 @@ def main(argv: list[str] | None = None) -> None:
     args_parser = argparse.ArgumentParser(prog="trajecta-identity-mcp")
     args_parser.add_argument("--profile", default=os.environ.get("TRAJECTA_IDENTITY_PROFILE", "aux"))
     args_parser.add_argument("--db", type=Path)
+    utf8_stdio()
     args = args_parser.parse_args(argv)
     server = IdentityServer(IdentityMemory(load_profile(args.profile), args.db, surface="mcp"))
     for line in sys.stdin:

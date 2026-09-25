@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from .identity import IdentityMemory
+from .paths import utf8_stdio
 from .profile import load_profile
 
 
@@ -62,9 +63,12 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    utf8_stdio()
     args = parser().parse_args(argv)
     memory = IdentityMemory(load_profile(args.profile), args.db, surface="cli")
     command = args.command
+    if command != "init":
+        memory.bootstrap()  # idempotent; a fresh machine works without a separate init
     if command == "init":
         result = memory.bootstrap()
     elif command == "status":

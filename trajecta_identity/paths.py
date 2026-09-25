@@ -55,3 +55,12 @@ def profile_search_dirs(env: dict[str, str] | None = None) -> list[Path]:
     dirs.append(data_dir(env=env) / "profiles")
     dirs.append(repo_profiles_dir())
     return dirs
+
+
+def utf8_stdio() -> None:
+    """Windows consoles and pipes default to a legacy code page; force UTF-8."""
+
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure:
+            reconfigure(encoding="utf-8", errors="strict" if stream is sys.stdin else "replace")
