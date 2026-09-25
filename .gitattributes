@@ -1,4 +1,6 @@
 # Keep LF everywhere so hashes and SQL are byte-identical on every OS.
 * text=auto eol=lf
+# PowerShell scripts keep CRLF for Windows.
+*.ps1 text eol=crlf
 # Canonical document: its sha256 is pinned in memory_core.vho. Never convert.
 docs/VECTOR-HUMAN-ONTOLOGY.md -text

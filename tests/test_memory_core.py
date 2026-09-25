@@ -587,7 +587,8 @@ def test_core_contains_no_consumer_identity_or_private_seed():
     root = Path(__file__).parents[1]
     text = "\n".join(
         path.read_text(encoding="utf-8")
-        for path in sorted((root / "memory_core").glob("**/*"))
+        for package in ("memory_core", "trajecta_identity")
+        for path in sorted((root / package).glob("**/*"))
         if path.is_file() and path.suffix in {".py", ".sql"}
     )
     forbidden = (

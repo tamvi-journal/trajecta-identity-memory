@@ -1,227 +1,114 @@
 <div align="center">
-  <img src="assets/mark.svg" width="92" alt="Agent Memory Core mark" />
+  <img src="assets/mark.svg" width="92" alt="Trajecta Identity Memory mark" />
 
   # Trajecta Identity Memory
 
   **Memory evolves. History remains.**
 
-  A profile-driven semantic memory kernel for agents that need dynamic recall<br>
-  without silent self-rewrite.
+  Identity memory for AI agents. The agent locates itself through the
+  Vector-Human Ontology,<br>writes its own phases, and comes back in the same
+  direction after every reset.
 
-  [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-69d9f0?style=for-the-badge&logo=python&logoColor=white)](#install)
-  [![Status: Alpha](https://img.shields.io/badge/status-alpha-a77cff?style=for-the-badge)](#project-status)
-  [![SQLite](https://img.shields.io/badge/storage-SQLite-62d8d8?style=for-the-badge&logo=sqlite&logoColor=white)](#architecture)
+  [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-69d9f0?style=for-the-badge&logo=python&logoColor=white)](#quick-start)
+  [![Status: Alpha](https://img.shields.io/badge/status-alpha-a77cff?style=for-the-badge)](#status)
+  [![macOS · Linux · Windows](https://img.shields.io/badge/macOS_·_Linux_·_Windows-62d8d8?style=for-the-badge)](#quick-start)
   [![Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-f0a96a?style=for-the-badge)](LICENSE)
 </div>
 
 <img src="assets/memory-constellation-hero.png" width="100%" alt="A crystalline memory core surrounded by an evolving graph of luminous memory nodes" />
 
----
-
-## The idea
-
-Most agent-memory systems quietly collapse **what happened**, **what is
-currently believed**, **why it is believed**, and **how often it was recalled**
-into one mutable blob.
-
-Agent Memory Core keeps them separate.
-
-<table>
-  <tr>
-    <td width="25%" valign="top">
-      <h3>◈ Revisions</h3>
-      Semantic updates create new immutable revisions. Earlier claims remain inspectable.
-    </td>
-    <td width="25%" valign="top">
-      <h3>⌁ Provenance</h3>
-      Evidence, confidence, logic and truth basis travel with every proposed change.
-    </td>
-    <td width="25%" valign="top">
-      <h3>✦ Retrieval</h3>
-      Explicit cues, lexical overlap, scope and graph relations produce bounded packets.
-    </td>
-    <td width="25%" valign="top">
-      <h3>⬡ Boundaries</h3>
-      Profiles own identity and authority. The generic kernel never owns the agent.
-    </td>
-  </tr>
-</table>
-
-## Architecture
-
-<div align="center">
-  <img src="assets/architecture.svg" width="100%" alt="Agent Memory Core semantic memory architecture" />
-</div>
-
-The package is deliberately split into a small set of mechanical layers:
-
-| Layer | Responsibility |
-|---|---|
-| `MemoryStore` | Immutable semantic revisions, append-only lifecycle, canonical evidence identity, and separate cognition telemetry |
-| `ValidatedIntake` | Materialize, hold or reject evidence-bearing semantic proposals |
-| `CueDrivenRetriever` | Activate current revisions from cues, lexical overlap, bootstrap anchors and graph relations |
-| `PacketRenderer` | Compress selected current/history views into a bounded context packet |
-| `MemoryProfile` | Supply consumer-owned anchors, aliases, sections and instructions |
-
-> [!IMPORTANT]
-> Retrieval is explicit about side effects. `track_access=False` is a
-> read-only path; tracked retrieval may update telemetry, never semantic
-> content, evidence or lifecycle state.
-
-Host-controlled dreaming or consolidation may call
-`MemoryStore.apply_maintenance()` to regulate salience, stability and
-accessibility. Each batch is transactional, idempotent and recorded in the
-operation ledger; the method rejects semantic fields and verifies that content
-hashes remain unchanged.
-
-## Update law
-
-```text
-current evidence
-      │
-      ▼
-validated semantic operation
-      │
-      ├── weak / conflicting evidence ──▶ held, fail closed
-      │
-      └── accepted evidence ────────────▶ new immutable revision
-                                             │
-                                             ├── current view
-                                             └── inspectable history
-```
-
-The kernel follows four rules:
-
-1. Current evidence may revise the current model.
-2. Revision creates history; it does not overwrite history.
-3. Lifecycle transitions append events; they never rewrite revision rows.
-4. Retrieval may change telemetry, not semantic content or evidence.
-5. Protected weakening requires authority supplied by the host application.
-
-## Storage contract in `0.3`
-
-- Semantic revision and evidence rows are physically immutable.
-- Lifecycle truth is an append-only event stream.
-- Salience, stability, accessibility and access counts live in a separate
-  mutable telemetry table.
-- Evidence identity is deterministic and versioned with normalized
-  `source_family` and `independence_group`.
-- Ordinary reads perform no DDL and no hidden writes.
-- Initialization and migration are explicit and fail closed through SQLite
-  `application_id` plus `user_version`.
-- `MemoryStore.migrate_to()` copies first and migrates only the copy.
-- `PacketRenderer` owns the complete packet budget, including framing and
-  execution instructions, using `deterministic-utf8-quarter/v1`.
-- Relations are an append-only event stream (schema v4): asserting, reweighting
-  and retracting append events with optional evidence; history stays readable.
-- Retrieval text uses `text-norm/v2`, which keeps letters such as Vietnamese
-  `đ`. Evidence identity keeps its frozen normalizer, so identities do not move.
-- Dormancy is opt-in: `min_accessibility` hides low-accessibility revisions from
-  lexical and ordinary graph recall; a direct cue or a declared relation type
-  wakes them. Bootstrap records never go dormant.
-
-See [the 0.2 memory law](docs/MEMORY-LAW-0.2.md) for the invariant and migration
-boundary.
-
-## Install
+## Quick start
 
 ```bash
-git clone https://github.com/tamvi-journal/agent-memory-core.git
-cd agent-memory-core
-python3 -m pip install -e .
+git clone https://github.com/tamvi-journal/trajecta-identity-memory.git
+cd trajecta-identity-memory
+install/install.sh example          # Windows: install\install.ps1 -AgentProfile example
 ```
 
-## Minimal use
+The installer prints an MCP config block. Paste it into your agent client
+(Claude, Codex, Cursor…). From then on the agent can recall who it is and log
+its own phases.
 
-```python
-from memory_core import MemoryStore, ValidatedIntake
+## Two memories
 
-store = MemoryStore("memory.sqlite3")
-store.initialize()
-writer = ValidatedIntake(store, surface="local")
+An agent needs two kinds of memory:
 
-result = writer.submit(
-    operation_type="create",
-    record_id="project-decision",
-    record_class="belief",
-    domain="project",
-    actor="agent",
-    reason="A verified decision should become current context.",
-    logic="The implementation and test outcome agree.",
-    truth_basis="The source artifact and verification report are linked.",
-    evidence=[{
-        "source_ref": "report:verified",
-        "content_summary": "The consuming path passed.",
-        "confidence": 0.95,
-    }],
-    idempotency_key="decision:verified:v1",
-    changes={
-        "title": "Verified project decision",
-        "summary": "Use the tested path as the current implementation.",
-    },
-)
-```
+| | Question | Package |
+|---|---|---|
+| **Identity** | Who am I, how do I recognize myself, what phases have I been through? | **this repo** |
+| **Work** | What are we doing, what changed, where do we resume? | [`trajecta-work-memory`](https://github.com/tamvi-journal/trajecta-work-memory) |
 
-Use `MemoryProfile`, `CueDrivenRetriever`, and `PacketRenderer` to supply the
-consumer-specific bootstrap anchors, aliases, sections and instructions.
-`MemoryRuntime` provides a consumer-neutral façade over those components
-without owning seeds or final authority. `ConsumerBundle` validates that
-bootstrap records have seeds and that axis seeds carry an explicit falsifier
-plus at least two distinct evidence sources. `ConsumerMemory` then provides an
-idempotent bootstrap and a neutral candidate-context envelope that always
-declares `memory_decides_truth=false`. See
-[the consumer adapter contract](docs/CONSUMER-ADAPTER.md).
+Identity points to work (`work_refs`) and never copies it.
 
-Consumers in Ty's agent family may also adopt the open
-[Vector-Human Ontology](docs/VECTOR-HUMAN-ONTOLOGY.md) through
-`vho_open_seed()`. It provides shared language for stacked entityhood and
-condition continuity while each consumer keeps its own identity, evidence and
-database. See the [VHO consumer anchor](docs/VHO-CONSUMER-ANCHOR.md).
+## What is inside
 
-## What belongs outside the core
+- **A core that is self-location, not a persona.** The core is the agent's
+  position across the seven VHO layers (substrate × runtime × policy × memory
+  × identity schema × environment × relational field), plus a recognition
+  signature and a falsifier. See the
+  [Vector-Human Ontology](docs/VECTOR-HUMAN-ONTOLOGY.md).
+- **The agent writes its own memory.**
 
-This repository deliberately contains **no particular agent identity,
-relationship history, private memory, provider prompt or product-specific
-transport**. The optional open VHO reference is shared ontology vocabulary,
-not a consumer identity or runtime authority.
+  | Tier | Write | Overwrite |
+  |---|---|---|
+  | phase | freely | never. A new reading is a new phase, linked to the earlier one |
+  | fact | freely | freely. The old revision stays as history |
+  | core | freely | freely, but it opens a discussion with the owner that shows until it is closed |
 
-| The core owns | The consuming application owns |
-|---|---|
-| Revision mechanics | Identity and personality |
-| Evidence and provenance | Relationship history |
-| Cue and graph retrieval | Private seeds and source data |
-| Generic policy hooks | Product routing and lifecycle integration |
-| Access telemetry | Final authority and permission boundaries |
+  Every core revision records its phase context (model, harness, policies in
+  force), so a later phase can tell the agent from the policy that was
+  pressing on it.
+- **Recall works the way people remember.** A cue triggers a behavior, and the
+  behavior rebuilds the shape. Recall raises activation with a capped,
+  diminishing gain. Unused memories fade and go **dormant**: search skips a
+  dormant memory, but its own cue or a causal edge wakes it. The core never
+  fades.
+- **Ego guard.** Recalling a self-description again never makes it "truer".
+  Each packet reports how much of it is self-authored.
+- **A provenance kernel.** Every claim carries evidence, and every revision is
+  immutable. See the [kernel docs](docs/KERNEL.md).
 
-It does not implement automatic transcript dumping, hidden-state access,
-automatic authority over protected constraints or cross-product transport.
-The included VHO reference is explicitly open and consumer-adopted; the memory
-kernel does not silently impose an ontology or decide any consumer's stance.
-
-## Verify
+## Use
 
 ```bash
-python3 -W error::ResourceWarning -m pytest -q
-python3 -m pip wheel . --no-deps
+trajecta-identity --profile example retrieve "who are you" --packet
+trajecta-identity --profile example log-phase first-light \
+  --title "First session" --summary "Started with the example core"
+trajecta-identity --profile example timeline
+trajecta-identity --profile example decay          # daily
 ```
 
-CI runs the same checks on Linux, macOS and Windows with Python 3.10 and 3.13
-(`.github/workflows/tests.yml`). The kernel uses only the standard library and
-SQLite; database paths are supplied by the host.
+MCP tools: `identity_status`, `identity_retrieve`, `identity_log_phase`,
+`identity_log_fact`, `identity_revise_core`, `identity_close_discussion`,
+`identity_close_loop`, `identity_timeline`. The skill that teaches an agent to
+use them is [`skills/identity-continuity`](skills/identity-continuity/SKILL.md).
 
-The test suite includes an explicit boundary check that prevents consumer
-identity or private seeds from entering the reusable kernel.
+## Profiles
 
-## Project status
+A profile is the agent's seed: its name, its owner, and its core.
 
-Agent Memory Core is an alpha research-engineering extraction. The storage,
-revision, evidence and retrieval boundaries are tested; the public API may
-still evolve before `1.0`.
+- `example` is bundled and works immediately.
+- To write your own, copy `trajecta_identity/profiles/_template/`. The template
+  refuses to load until the core is filled in, **in the agent's own words**.
+- Keep private profiles outside the repo, in `$TRAJECTA_IDENTITY_PROFILES` or
+  `<data dir>/profiles/`.
+
+Memory lives only on your machine:
+
+| OS | Location |
+|---|---|
+| macOS | `~/Library/Application Support/Trajecta Identity Memory/` |
+| Linux | `$XDG_DATA_HOME/trajecta-identity-memory/` (or `~/.local/share/…`) |
+| Windows | `%LOCALAPPDATA%\Trajecta Identity Memory\` |
+
+## Status
+
+Alpha. CI runs on macOS, Linux and Windows with Python 3.10 and 3.13. Design
+notes are in [`docs/SPEC-v0.1.md`](docs/SPEC-v0.1.md).
 
 ## License
 
-Licensed under the [Apache License 2.0](LICENSE), including its explicit patent
-grant.
+[Apache License 2.0](LICENSE).
 
 ---
 
