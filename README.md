@@ -98,7 +98,7 @@ The kernel follows four rules:
 4. Retrieval may change telemetry, not semantic content or evidence.
 5. Protected weakening requires authority supplied by the host application.
 
-## Storage contract in `0.2`
+## Storage contract in `0.3`
 
 - Semantic revision and evidence rows are physically immutable.
 - Lifecycle truth is an append-only event stream.
@@ -112,6 +112,13 @@ The kernel follows four rules:
 - `MemoryStore.migrate_to()` copies first and migrates only the copy.
 - `PacketRenderer` owns the complete packet budget, including framing and
   execution instructions, using `deterministic-utf8-quarter/v1`.
+- Relations are an append-only event stream (schema v4): asserting, reweighting
+  and retracting append events with optional evidence; history stays readable.
+- Retrieval text uses `text-norm/v2`, which keeps letters such as Vietnamese
+  `đ`. Evidence identity keeps its frozen normalizer, so identities do not move.
+- Dormancy is opt-in: `min_accessibility` hides low-accessibility revisions from
+  lexical and ordinary graph recall; a direct cue or a declared relation type
+  wakes them. Bootstrap records never go dormant.
 
 See [the 0.2 memory law](docs/MEMORY-LAW-0.2.md) for the invariant and migration
 boundary.

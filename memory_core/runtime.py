@@ -50,6 +50,10 @@ class MemoryRuntime:
         token_budget: int = 1400,
         include_history: bool | None = None,
         track_access: bool = True,
+        min_accessibility: float | None = None,
+        wake_on_direct_cue: bool = True,
+        wake_relation_types: tuple[str, ...] = (),
+        access_gain: float = 0.01,
     ):
         return self.retriever.retrieve(
             query,
@@ -59,6 +63,10 @@ class MemoryRuntime:
             token_budget=token_budget,
             include_history=include_history,
             track_access=track_access,
+            min_accessibility=min_accessibility,
+            wake_on_direct_cue=wake_on_direct_cue,
+            wake_relation_types=wake_relation_types,
+            access_gain=access_gain,
         )
 
     def retrieve_readonly(

@@ -64,7 +64,9 @@ migrated = legacy_store.migrate_to("memory-v3.sqlite3")
 ```
 
 SQLite `application_id` identifies Agent Memory Core and `user_version`
-identifies schema v3.
+identifies the schema. Since 0.3 the current schema is v4; a v3 store fails
+closed on read and migrates in place through an explicit `initialize()` (or on
+a copy through `migrate_to()`).
 
 ## Packet boundary
 
@@ -83,3 +85,49 @@ The kernel does not own an agent's identity, relationship, private seeds,
 permission policy, truth authority, dream schedule, transport or product
 cutover. Consumers reuse the mechanism and keep separate profiles, evidence,
 databases and action gates.
+
+## Addendum 0.3
+
+### Relations remember
+
+Relations were the one mutable part of the semantic graph: `add_relation`
+upserted weight and status in place and carried no evidence. Schema v4 makes
+them an append-only event stream (`memory_relation_events_v4`):
+
+- `assert` and `retract` events, sequenced per relation, protected by
+  update/delete triggers;
+- optional evidence per event, captured through the same canonical evidence
+  identity as revisions;
+- re-asserting an unchanged relation is a no-op; a new weight or source appends
+  an event; `relation_history()` returns every event;
+- the current graph is the view `memory_relation_current_v4`.
+
+Migration carries every v3 relation row into the stream once (an inactive row
+becomes `assert` + `retract`, actor `memory-core-migration`). The v3 table is
+kept as migration evidence and is no longer written or read.
+
+### Text normalization
+
+Retrieval uses `text-norm/v2`, which transliterates letters NFKD cannot
+decompose (`đ`, `ð`, `ł`, `ø`, `æ`, `œ`, `þ`, ...) instead of dropping them.
+`"Đuôi"` was `"uoi"`; it is now `"duoi"`. Cue norms are recomputed from the
+raw cue at query time, so older rows keep matching.
+
+Evidence identity (`evidence-v2`) keeps the original normalizer frozen as
+`normalize_identity_v1`. Changing identity normalization requires a new
+evidence identity version, never an in-place change.
+
+### Dormancy
+
+Accessibility remains telemetry. The retriever can now use it for selection
+only:
+
+- `min_accessibility`: below it a revision is dormant and skipped by lexical
+  overlap and ordinary graph spread;
+- `wake_on_direct_cue` (default true): a direct cue still reaches it;
+- `wake_relation_types`: graph edges of these types may reach it;
+- bootstrap records never go dormant;
+- `access_gain` sets how much tracked retrieval adds (default 0.01).
+
+The default (`min_accessibility=None`) keeps 0.2 behavior. Decay schedules and
+wake-up boosts are consumer policy, applied through `apply_maintenance()`.
