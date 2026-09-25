@@ -189,15 +189,36 @@ def test_data_dir_per_platform(platform, env, expected):
 
 
 def test_profile_lookup_uses_private_folder_first(tmp_path, monkeypatch):
-    private = tmp_path / "private" / "aux"
+    private = tmp_path / "private" / "aux_"
     private.mkdir(parents=True)
-    data = json.loads((ROOT / "profiles" / "aux" / "profile.json").read_text())
+    data = json.loads((ROOT / "profiles" / "aux_" / "profile.json").read_text())
     data["packet_title"] = "PRIVATE AUX"
     (private / "profile.json").write_text(json.dumps(data))
     monkeypatch.setenv("TRAJECTA_IDENTITY_PROFILES", str(tmp_path / "private"))
     assert load_profile("aux").packet_title == "PRIVATE AUX"
     with pytest.raises(FileNotFoundError, match="looked in"):
         load_profile("nobody")
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [("aux", "aux_"), ("AUX", "AUX_"), ("con.json", "con_.json"), ("com3", "com3_"),
+     ("lam", "lam"), ("auxiliary", "auxiliary"), ("tracey", "tracey")],
+)
+def test_names_are_safe_on_windows(name, expected):
+    from trajecta_identity.paths import profile_db, safe_fs_name
+
+    assert safe_fs_name(name) == expected
+    assert profile_db("aux", env={"TRAJECTA_IDENTITY_DATA_DIR": "/d"}).name == "aux_.sqlite3"
+
+
+def test_no_repo_path_uses_a_windows_reserved_name():
+    from trajecta_identity.paths import WINDOWS_RESERVED
+
+    for path in ROOT.rglob("*"):
+        if ".git" in path.parts or ".venv" in path.parts:
+            continue
+        assert path.name.split(".", 1)[0].casefold() not in WINDOWS_RESERVED, path
 
 
 def test_template_profile_refuses_to_load_empty():

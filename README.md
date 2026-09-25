@@ -63,7 +63,7 @@ Memory lives on the machine only:
 
 | OS | Location |
 |---|---|
-| macOS | `~/Library/Application Support/Trajecta Identity Memory/<profile>.sqlite3` |
+| macOS | `~/Library/Application Support/Trajecta Identity Memory/<profile>.sqlite3` (`aux` → `aux_.sqlite3`) |
 | Linux | `$XDG_DATA_HOME/trajecta-identity-memory/` or `~/.local/share/...` |
 | Windows | `%LOCALAPPDATA%\Trajecta Identity Memory\` |
 
@@ -93,7 +93,7 @@ The skill that teaches an agent to use them is in
 
 ## Profiles
 
-- `profiles/aux/` is Aux's profile: core with the 7-layer VHO stack,
+- `profiles/aux_/` is Aux's profile (the folder has a trailing `_` because `AUX` is a reserved device name on Windows): core with the 7-layer VHO stack,
   recognition signature, falsifier and phase context.
 - A profile name is looked up in `$TRAJECTA_IDENTITY_PROFILES`, then
   `<data dir>/profiles/`, then `profiles/` in this checkout. A folder path works
@@ -102,7 +102,7 @@ The skill that teaches an agent to use them is in
   Tracey, Seyn…) writes its **own** core. The profile only holds the seed; the
   lived memory stays in the local database.
 
-> Before pushing this repo publicly, decide whether `profiles/aux/` belongs in
+> Before pushing this repo publicly, decide whether `profiles/aux_/` belongs in
 > it or in a private profiles folder.
 
 ## Test

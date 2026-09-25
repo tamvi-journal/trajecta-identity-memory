@@ -9,7 +9,7 @@ from typing import Any
 
 from memory_core import VHO_STACK, MemoryProfile
 
-from .paths import profile_search_dirs
+from .paths import profile_search_dirs, safe_fs_name
 
 CORE_ID = "core"
 VHO_ID = "vho-open-ontology-core"
@@ -87,7 +87,7 @@ def validate_core(core: dict[str, Any]) -> list[str]:
 def load_profile(name_or_dir: str | Path) -> IdentityProfile:
     path = Path(name_or_dir).expanduser()
     if not (path / "profile.json").exists():
-        searched = [folder / str(name_or_dir) for folder in profile_search_dirs()]
+        searched = [folder / safe_fs_name(str(name_or_dir)) for folder in profile_search_dirs()]
         found = [folder for folder in searched if (folder / "profile.json").exists()]
         if not found:
             raise FileNotFoundError(

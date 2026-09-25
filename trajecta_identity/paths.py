@@ -28,9 +28,30 @@ def data_dir(platform: str | None = None, env: dict[str, str] | None = None) -> 
     return root / "trajecta-identity-memory"
 
 
+# Windows reserves these device names, with or without an extension
+# ("aux", "AUX.sqlite3", "aux.json" are all invalid paths there).
+WINDOWS_RESERVED = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{i}" for i in range(1, 10)}
+    | {f"lpt{i}" for i in range(1, 10)}
+)
+
+
+def safe_fs_name(name: str) -> str:
+    """A file/folder name that is valid on macOS, Linux and Windows.
+
+    The same mapping is used on every OS, so databases and profile folders
+    stay portable: ``aux`` -> ``aux_``.
+    """
+
+    safe = "".join(ch for ch in name if ch.isalnum() or ch in "-_.").strip(". ") or "default"
+    if safe.split(".", 1)[0].casefold() in WINDOWS_RESERVED:
+        safe = safe.split(".", 1)[0] + "_" + (("." + safe.split(".", 1)[1]) if "." in safe else "")
+    return safe
+
+
 def profile_db(profile: str, **kwargs) -> Path:
-    safe = "".join(ch for ch in profile if ch.isalnum() or ch in "-_") or "default"
-    return data_dir(**kwargs) / f"{safe}.sqlite3"
+    return data_dir(**kwargs) / f"{safe_fs_name(profile)}.sqlite3"
 
 
 ENV_PROFILES_DIR = "TRAJECTA_IDENTITY_PROFILES"
