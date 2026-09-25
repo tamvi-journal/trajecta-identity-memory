@@ -144,6 +144,15 @@ class CueDrivenRetriever:
                 if overlap:
                     scores[record_id] += min(1.0, overlap) * 0.9
                     reasons[record_id].append(f"lexical:{overlap:.2f}")
+                # A match in the title says more than the same words buried in
+                # a long body, where common words match almost anything.
+                title_tokens = set(tokens(revision["title"]))
+                title_overlap = len(query_tokens & title_tokens) / max(
+                    1, len(query_tokens)
+                )
+                if title_overlap:
+                    scores[record_id] += min(1.0, title_overlap) * 0.6
+                    reasons[record_id].append(f"title:{title_overlap:.2f}")
 
         for record_id in self.profile.bootstrap_record_ids:
             if record_id in revisions:
