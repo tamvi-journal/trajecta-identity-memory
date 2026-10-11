@@ -29,15 +29,16 @@ tamper-refusal tests remain enforced; the original corpus files are unchanged.
 
 Node's HTTP parser has a finite method vocabulary and trims header whitespace. The server
 preserves original Host/Origin values and handles unsupported valid method tokens, including
-fragmented BREW requests, through the same P21 path. Node's automatic Expect responses are
-also routed through that path. No comparator exception was added for these boundaries.
+fragmented BREW requests and Python-accepted LF framing, through the same P21 path. Node's automatic Expect responses are
+also routed through that path. A socket dispatches only its first request, matching Python's
+close-after-response behavior even if another request is pipelined in the same network chunk. No comparator exception was added for these boundaries.
 
 ## Evidence
 
 - Python comprehensive P21–P24 / K1–K5 / view preflight: **75 tests + 24 subtests passed**.
 - Full Python suite: **604 tests + 24 subtests passed**.
-- Node suite: **561 passed / 562 total**, one existing Windows-only test skipped on macOS.
-  The 60 new tests include corpus, P21, CLI, browser seams and installed npm acceptance.
+- Node suite: **565 passed / 566 total**, one existing Windows-only test skipped on macOS.
+  The 64 new tests include corpus, P21, CLI, browser seams and installed npm acceptance.
 - view-v1: **667/667 cases**, across all 19 scenarios: 18 initialized/error fixtures with
   37 cases each, plus the separate G15 case. No IPv6 skip locally.
 - R3 X view: **192 HTTP cases**, all four writer/reader pairs, eight public writes, and

@@ -22,6 +22,10 @@ import { outputJson } from "./mcp.ts";
 
 const PAGE = readFileSync(new URL("../assets/view.html", import.meta.url));
 const asciiLower = (value: string): string => value.replace(/[A-Z]/g, (c) => c.toLowerCase());
+function headerEnd(raw: Buffer): { index: number; length: number } | null {
+  const match = /\r?\n\r?\n/u.exec(raw.toString("latin1"));
+  return match ? { index: match.index, length: match[0].length } : null;
+}
 
 export function snapshot(memory: IdentityMemory): unknown {
   if (memory.store.schemaInfo().state === "uninitialized") memory.bootstrap();
@@ -139,15 +143,18 @@ export async function startView(
   memory.close();
   let boundPort: number;
   const wire = new WeakMap<Socket, Buffer>();
+  const answered = new WeakSet<Socket>();
   const handle = (request: IncomingMessage, response: ServerResponse) => {
+    if (answered.has(request.socket)) return;
+    answered.add(request.socket);
     // Node trims trailing header whitespace; Python's email parser preserves it.
     // Recover that value before the exact P21 comparison. Python closes each HTTP/1.0
     // response, so there is one request per socket and no persistent framing state.
     const prefix = wire.get(request.socket);
-    const end = prefix?.indexOf("\r\n\r\n") ?? -1;
+    const end = prefix ? headerEnd(prefix) : null;
     let rawHeaders = request.rawHeaders;
-    if (prefix && end >= 0) {
-      const lines = prefix.subarray(0, end).toString("latin1").split("\r\n").slice(1);
+    if (prefix && end) {
+      const lines = prefix.subarray(0, end.index).toString("latin1").split(/\r?\n/u).slice(1);
       rawHeaders = [];
       for (const line of lines) {
         if (/^[ \t]/u.test(line) && rawHeaders.length) rawHeaders[rawHeaders.length - 1] += "\r\n" + line;
@@ -212,10 +219,10 @@ export async function startView(
   server.on("connection", (socket) => {
     socket.prependListener("data", (chunk: Buffer) => {
       const previous = wire.get(socket) ?? Buffer.alloc(0);
-      if (previous.indexOf("\r\n\r\n") >= 0 || previous.length > 65536) return;
+      if (headerEnd(previous) || previous.length > 65536) return;
       const joined = Buffer.concat([previous, chunk]);
-      const end = joined.indexOf("\r\n\r\n");
-      wire.set(socket, joined.subarray(0, end >= 0 ? end + 4 : 65537));
+      const end = headerEnd(joined);
+      wire.set(socket, joined.subarray(0, end ? end.index + end.length : 65537));
     });
   });
   // CONNECT is emitted separately by node:http, but it has the same P21/G16 boundary.
@@ -229,6 +236,7 @@ export async function startView(
   const refusedSockets = new WeakSet<object>();
   server.on("clientError", (error, socket) => {
     if (!socket.writable) return;
+    if (answered.has(socket)) return;
     if (refusedSockets.has(socket)) return;
     refusedSockets.add(socket);
     const request = new IncomingMessage(socket);
@@ -237,22 +245,27 @@ export async function startView(
     response.shouldKeepAlive = false;
     response.once("finish", () => socket.end());
     const failure = error as Error & { code?: string; rawPacket?: Buffer };
-    if (failure.code !== "HPE_INVALID_METHOD" || !failure.rawPacket) {
+    const received = wire.get(socket) ?? failure.rawPacket;
+    const pythonLineEndings = received && /(?:^|[^\r])\n/u.test(received.toString("latin1"));
+    if (!received || (failure.code !== "HPE_INVALID_METHOD" && !pythonLineEndings)) {
       send(response, 400, Buffer.from("Bad Request"), "text/plain");
       return;
     }
-    // llhttp has a finite method vocabulary. Python guards arbitrary valid method tokens
-    // (for example BREW) before its unsupported-method response. Keep that same boundary,
+    // llhttp has a finite method vocabulary and requires CRLF. Python also accepts
+    // LF and guards arbitrary valid method tokens (for example BREW). Keep that boundary,
     // including when the request's headers arrive in a later network chunk.
-    let pending = wire.get(socket) ?? failure.rawPacket;
+    let pending = received;
     const parse = (chunk?: Buffer) => {
       if (chunk) pending = Buffer.concat([pending, chunk]);
-      const end = pending.indexOf("\r\n\r\n");
-      if (end < 0 && pending.length <= 65536) return;
+      const end = headerEnd(pending);
+      if (!end && pending.length <= 65536) return;
       socket.off("data", parse);
-      const lines = pending.subarray(0, end).toString("latin1").split("\r\n");
+      const lines = pending
+        .subarray(0, end?.index ?? 0)
+        .toString("latin1")
+        .split(/\r?\n/u);
       const first = /^([!#$%&'*+.^_`|~0-9A-Za-z-]+) (\S+) HTTP\/1\.[01]$/u.exec(lines.shift() ?? "");
-      if (end < 0 || !first || lines.some((line) => !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+:/u.test(line))) {
+      if (!end || !first || lines.some((line) => !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+:/u.test(line))) {
         send(response, 400, Buffer.from("Bad Request"), "text/plain");
         return;
       }

@@ -271,3 +271,50 @@ test("stored domain names cannot change integer counter JSON types", async () =>
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("HTTP/1.0 close semantics never dispatch a pipelined second request", async () => {
+  const root = temporary(),
+    memory = new IdentityMemory(PROFILE, resolve(root, "store.sqlite3"));
+  const server = await startView(memory, { port: 0 });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const socket = connect(server.port, "127.0.0.1");
+      socket.once("error", reject);
+      socket.setTimeout(5000, () => socket.destroy(new Error("pipeline response timed out")));
+      socket.resume();
+      socket.once("close", resolve);
+      socket.once("connect", () =>
+        socket.write(
+          `GET / HTTP/1.1\r\nHost: 127.0.0.1:${server.port}\r\n\r\n` +
+            "GET /api/snapshot HTTP/1.1\r\nHost: evil.example\r\n\r\n",
+        ),
+      );
+    });
+    assert.deepEqual(inventory(root), []);
+  } finally {
+    await server.close();
+    memory.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+for (const [method, value, expected] of [
+  ["GET", "127.0.0.1:{port}", 200],
+  ["GET", "127.0.0.1:{port} ", 403],
+  ["BREW", "evil.example", 403],
+] as const) {
+  test(`P21 Python-accepted LF-only framing: ${method} ${value}`, async () => {
+    const root = temporary(),
+      memory = new IdentityMemory(PROFILE, resolve(root, "store.sqlite3"));
+    const server = await startView(memory, { port: 0 });
+    try {
+      const response = await request(server, { method, headers: [["Host", value]], lineSeparator: "\n" });
+      assert.equal(response.status, expected);
+      assert.deepEqual(inventory(root), []);
+    } finally {
+      await server.close();
+      memory.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}

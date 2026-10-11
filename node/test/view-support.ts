@@ -48,6 +48,7 @@ export function temporary(): string {
 }
 export async function request(server: Pick<RunningView, "port">, item: any, host = "127.0.0.1") {
   const headers: [string, string][] = item.headers ?? [["Host", `127.0.0.1:${server.port}`]];
+  const separator = item.lineSeparator ?? "\r\n";
   const rendered = headers.map(
     ([key, value]) =>
       `${key}: ${value
@@ -55,8 +56,8 @@ export async function request(server: Pick<RunningView, "port">, item: any, host
         .replaceAll("{other}", String((server.port % 65535) + 1))}`,
   );
   const raw =
-    `${item.method ?? "GET"} ${item.path ?? "/"} HTTP/1.1\r\n${rendered.join("\r\n")}` +
-    `${rendered.length ? "\r\n" : ""}Connection: close\r\n\r\n`;
+    `${item.method ?? "GET"} ${item.path ?? "/"} HTTP/1.1${separator}${rendered.join(separator)}` +
+    `${rendered.length ? separator : ""}Connection: close${separator}${separator}`;
   const bytes = await new Promise<Buffer>((resolve, reject) => {
     const socket = connect(server.port, host),
       chunks: Buffer[] = [];
