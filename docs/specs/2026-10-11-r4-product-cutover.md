@@ -136,7 +136,7 @@ It is **not** `npm pack`. npm publish is not used in R4.
 
 **Phase A: verify and stage.** Nothing visible to the user changes in this phase. A failure here deletes only the staging directory this run created.
 1. **Probe Node.** Look on PATH, then in known locations (Homebrew, nvm/fnm/volta shims, `%ProgramFiles%\nodejs`), version-probing each candidate against the supported set. If none passes, write `trajecta: need Node 22.19+ or 24 LTS` to stderr, exit 1, and change nothing.
-2. **Verify the release.** Check `release.json.sig` with the embedded key, using an **inline** verifier run by the probed Node (`node -e`, with `crypto.verify('ed25519')`). Then check the tarball's SHA-256 and size against `release.json`. Any mismatch → exit 1.
+2. **Verify the release.** Check `release.json.sig` with the embedded key, using an **inline** verifier run by the probed Node (`node -e`). It performs exactly the §5.1 contract: `crypto.verify(null, releaseJsonBytes, createPublicKey({key, format: "der", type: "spki"}), signatureBytes)`. Then check the tarball's SHA-256 and size against `release.json`. Any mismatch → exit 1.
 3. **Inspect, then extract (Lam R4-F5).** The system `tar` is not used.
    - The release also ships `trajecta-extract.mjs`, a small dependency-free extractor. Its SHA-256 is inside the signed `release.json`, and it is checked before it runs.
    - **Pass 1, metadata only:** it reads every gzip/ustar header (PAX `x` records are allowed only for `path`) and rejects the whole archive, before writing any byte, if any entry:
@@ -152,9 +152,21 @@ It is **not** `npm pack`. npm publish is not used in R4.
 
 **Phase B: commit.** This is the only switch point. Lam R4-F6 applies to this phase.
 
-0. **Lock.** Every installer or uninstaller run first takes `<root>/.lock` by exclusive create (`O_EXCL` or `wx`), recording its pid and start time. A second run refuses with `trajecta: another install is running (pid N)`. A lock whose pid is gone is broken with a printed notice.
+0. **Lock (race-safe; Lam #40 @ 560742a item 4).**
+   - **Acquire:** create `<root>/.lock` by exclusive create (`wx`). It holds an **owner token**: 128 random bits, plus the pid, hostname and creation time. The holder deletes the lock only after re-reading it and confirming its own token.
+   - **Busy:** if `.lock` exists and its pid is alive on this host (`process.kill(pid, 0)` succeeds), the run refuses with `trajecta: another install is running (pid N)`. PID reuse can only make a dead holder look alive. That case **blocks**; it never corrupts.
+   - **Stale recovery is serialized** by a second mutex, `<root>/.lock.recover`, also taken by exclusive create with its own token.
+     - The recoverer re-reads `.lock` **while holding `.recover`**. It unlinks `.lock` only if the file still holds the **same dead token** it first read. Then it releases `.recover` and retries acquiring `.lock` from the start.
+     - Why this is safe: while a dead `.lock` exists, no acquirer can create a new `.lock`, and only one recoverer can act at a time. So the token re-read under `.recover` cannot belong to a newly acquired lock, and a contender can never delete another's fresh lock.
+   - **A stale `.recover`** (its holder died mid-recovery) is never auto-broken. The run prints `trajecta install --break-lock` instructions. That command shows both tokens and requires a typed confirmation on a TTY.
+   - **Test (M3):** 200 rounds of 4 concurrent contenders against a dead lock, plus contenders racing a live acquirer. Exactly one holder at any time; no fresh lock is ever deleted; no deadlock.
 6. **Rename** `<staging>/trajecta-<ver>` to `<root>/<ver>`, on the same volume. If `<root>/<ver>` already exists and its `MANIFEST.json` digest matches, reuse it. If it exists with a different digest → exit 1.
-7. **Plan.** Write `<root>/<ver>/.planned.json`, listing every path the install *will* create, with its **expected** SHA-256. The launchers, wrappers and plugin are deterministic given the install root (K3), so their bytes are precomputed. A plan grants **no** ownership.
+7. **Plan.** Write `<root>/<ver>/.planned.json`, listing every path the install *will* create, with its **expected** SHA-256. A plan grants **no** ownership.
+   - The expected hashes come from **actual bytes built in Phase A**, not from an assumption:
+     - The launchers and wrappers are rendered from templates into staging.
+     - The `.plugin` zip is **built into staging by this Node's zlib**.
+     - Phase C copies those exact staged bytes into place. It never rebuilds them.
+   - K3 is used only for the entry list and entry bytes. The zip archive bytes are not assumed stable across zlib versions.
 8. **Update the pointer atomically (§5.3).** `current` holds **both** the new version (line 1) and the previous version (line 2), so a single rename switches the version and records the rollback target together. No second file can disagree with it.
 
 **Ownership ledger.** `<root>/owned.json` lists the paths the product **verifiably** created. Each entry records the path, its SHA-256, and whether it is per-version or `shared` (the user-bin launcher and the wrappers in `<root>/bin`).
@@ -163,7 +175,7 @@ It is **not** `npm pack`. npm publish is not used in R4.
 
 **Phase C: post-commit, idempotent.** Running `trajecta install` again resumes here.
 
-9. **Launcher.** Write it only if it is absent or already owned (its hash is in a `.installed.json`); otherwise leave it and report.
+9. **Launcher.** Write it only if it is absent, or if it is listed in `owned.json` with a matching hash. Otherwise leave it and report.
 10. **Plugin file (§6).**
 11. **Store bootstrap,** only for a store that does not exist yet.
     - A bootstrapped empty store is a **valid state**. It is not rolled back: a later failure leaves it, and the next install or `doctor` reports it.
@@ -183,11 +195,11 @@ It is **not** `npm pack`. npm publish is not used in R4.
 - **Pointer:** `<root>/current` is a **text file** with two lines: the current version, then the previous version (or an empty line). It is not a symlink and not a directory.
   - Launchers read only line 1: `read -r` in sh, `set /p` in cmd.
   - Updates write `current.tmp`, flush it, then `rename` it over `current`. That is `MoveFileExW` with replace-existing on Windows, which is atomic on the same NTFS volume, and POSIX `rename(2)` elsewhere.
-- **Node path:** `<root>/node` is a text file holding the absolute path of the Node binary probed at install time.
+- **Node path, bound per version (Lam #40 @ 560742a item 3):** `<root>/<ver>/node` is a text file inside the version directory, holding the absolute path of the Node binary probed by **that** install. It is written into staging in Phase A, so it is covered by the step 6 rename. There is no root-level `node` file. The pointer switch therefore changes the version and its Node path together, and `--rollback` returns to the old version **with its own** recorded Node.
 - **Launchers** are **OS-native**, so they run even when Node is gone:
   - POSIX: `<root>/bin/trajecta` (sh) and `<root>/bin/trajecta-mcp` (sh).
   - Windows: `<root>\bin\trajecta.cmd` and `<root>\bin\trajecta-mcp.cmd`.
-  - Each one reads `current` and `node`, re-probes that Node's version, and on failure writes `trajecta: need Node 22.19+ or 24 LTS` (or `<server>: need …` for the MCP wrapper) to stderr and exits 1.
+  - Each one reads line 1 of `current`, then `<root>/<ver>/node`, re-probes that Node's version, and on failure writes `trajecta: need Node 22.19+ or 24 LTS` (or `<server>: need …` for the MCP wrapper) to stderr and exits 1.
   - Otherwise it runs `"<node>" "<root>/<ver>/product/src/cli.ts" …` with stdio passed through.
 - **Install root:** `~/.trajecta/` on POSIX and `%LOCALAPPDATA%\Trajecta\` on Windows. The user bin directory gets a copy or link of the `trajecta` launcher. If that directory is not on PATH, the installer prints the one line to add. It never edits shell rc files.
 
@@ -249,7 +261,7 @@ It is **not** `npm pack`. npm publish is not used in R4.
 |---|---|
 | **M1 engine matrix** | Every identity corpus and R3 X/Z, plus the work engine suite, on {macOS, Windows, Linux} × {Node 22, Node 24} |
 | **M2 product contract** | **Pass-through:** over the full cli-v1 corpus and the work CLI suite, argv, stdin, cwd and env are preserved, and stdout, stderr and exit code are byte-exact (§2.3). **Authority:** the adapter lint and source scan are clean, the differential authority test passes, and the write-trace test passes (§2.4). **Build:** two builds produce byte-identical tarballs, `MANIFEST.json` verifies, and `compat.json` is regenerated with an empty diff. **Offline:** in a network-disabled sandbox, the tarball is unpacked, `trajecta version` reports both engine SHAs, and an identity `retrieve` and a `work` round trip run with no Git or npm access |
-| **M3 clean-machine install** | On each OS, with Node 22 and with Node 24: install → doctor → `identity retrieve` → `work` round trip → uninstall. Store bytes are unchanged by uninstall, and `.installed.json` ownership is respected (a modified launcher is kept). **The no-Node case runs in a proven isolated environment:** a Linux container image that has no `node` (asserted with `command -v node` failing first); on macOS and Windows, PATH and the known-location roots point at an empty temp tree, and the test first asserts that the probe list resolves nothing. **Faults are injected** at every Phase A/B/C step boundary (signature, SHA, a tar path-traversal entry, a file digest, doctor, the rename, the pointer write, the plugin write). Each must land in the state §5.2 promises, and re-running install must converge |
+| **M3 clean-machine install** | On each OS, with Node 22 and with Node 24: install → doctor → `identity retrieve` → `work` round trip → uninstall. Store bytes are unchanged by uninstall, and `.owned.json` ownership is respected (a modified launcher is kept). **The no-Node case runs in a proven isolated environment:** a Linux container image that has no `node` (asserted with `command -v node` failing first); on macOS and Windows, PATH and the known-location roots point at an empty temp tree, and the test first asserts that the probe list resolves nothing. **Faults are injected** at every Phase A/B/C step boundary (signature, SHA, a tar path-traversal entry, a file digest, doctor, the rename, the pointer write, the plugin write). Each must land in the state §5.2 promises, and re-running install must converge |
 | **M4 upgrade from Python** | A fixture with the old venv install and an R3-era store: the installer detects it, prints the replacement, changes nothing, and the TS runtime reads and writes the store under the R3 laws |
 | **M5 plugin** | K1–K6 exact. The `.mcp.json` command is the OS-native wrapper. With Node removed, the wrapper prints the `<server>: need …` refusal and exits 1. With Node present, an MCP `initialize` round trip through the wrapper is byte-exact on all 3 OSes, including Windows `cmd.exe /c` |
 | **M6 P25/P26** | Both runtimes, new corpus cases, three seeds |
@@ -286,6 +298,12 @@ Merge rule: unchanged. Lam approves the exact head, CI is green on that head, th
   - **Signing and release stay disabled until Ty approves this setup.**
 
 ## 11. Lam's reviews, and how they were applied
+
+### @ 560742a (four remaining items)
+1. Step 2 now executes exactly the §5.1 `verify(null, …)` contract.
+2. The stale `.installed.json` names are replaced with `owned.json` and `.planned.json`. Planned digests come from the plugin and wrapper bytes actually built in Phase A (no K3 assumption about zip bytes), and Phase C copies those exact bytes.
+3. The Node path is bound per version (`<root>/<ver>/node`), so it switches and rolls back with `current`.
+4. Race-safe lock: owner tokens, stale recovery serialized by a `.recover` mutex with a token re-read, a human `--break-lock` for a stale `.recover`, and a 200-round concurrent recovery test.
 
 ### @ 90be1e1 (R4-F5..F7, Q9)
 - **F5:**
