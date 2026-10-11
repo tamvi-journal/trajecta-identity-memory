@@ -111,11 +111,33 @@ Python generates the corpus. TS must match it byte for byte.
 - **Cross-runtime:** the Python view serves a store written by TS, and the TS view serves a store written by Python, through the R3 X harness. The responses equal those on a single-runtime store.
 - **OS matrix:** the same three OSes as R3.
 
+### 3.4 HTTP framing outside view-api/v1 (Aux review of PR #38 @ 08e9ccf)
+
+Aux ran a differential fuzz: the Python worker and the TS worker on copies of the view-fixture store, sent the same raw socket bytes, whole and in 3-byte chunks.
+- **Valid requests:** a 1,500-case random percent-encoded cue fuzz and every valid edge case match exactly. The edge cases covered pipelining, `Expect`, LF framing, unknown methods, absolute-form, `//`, `;params`, dot segments, a percent-encoded path, HEAD, `OPTIONS *`, chunked transfer encoding, and Origin and Host case variants.
+- **Requests that are not valid HTTP/1.1** produce six differences. In each, Python is the more permissive side, and P21 still holds in both runtimes:
+
+| Input | Python | TS |
+|---|---|---|
+| more than 100 header fields | 431 | **200 (serves)** |
+| raw non-ASCII bytes in the request-target (RFC 3986 forbids them; browsers percent-encode) | 200, with the cue decoded as Latin-1 mojibake | 400 |
+| whitespace between the header name and the colon (`Host : …`) | 403 | 400 |
+| an obs-fold continuation of Host | 403 | 400 |
+| an HTTP/0.9 request line, or non-HTTP bytes | a status-less 0.9 reply | 400 or 403 |
+| an oversized header line | 431 | 400 |
+
+**Law F-1. The TS view may be stricter than the oracle on invalid HTTP framing, never more permissive.**
+- For any request that Python refuses with a status of 400 or above, TS must also refuse with a status of 400 or above, through the common header path, writing nothing.
+- For any request that is valid HTTP/1.1 (RFC 9112, with a request-target allowed by RFC 3986), TS must match the oracle exactly. That is view-v1 plus the fuzz above.
+- The more-than-100-headers case breaks F-1. **TS must answer 431** before routing, but after the P21 Host/Origin guard has passed, matching Python's limit. A regression test is required.
+- The other five rows are allowed under F-1 and are frozen as **G17**.
+
 ## 4. Frozen gaps
 
 | Gap | What it is | Decided in |
 |---|---|---|
 | G15 | `snapshot()` bootstraps an `uninitialized` store (V6). The branch is only reachable if the store disappears while serving. Both runtimes keep it. It is an **explicit exception to read purity** (§3.3), pinned by its own corpus case: delete the store while serving, request `/api/snapshot`, and compare the resulting store with a Python bootstrap | R5: a read surface should show an empty state, not write |
+| G17 | On requests that are not valid HTTP/1.1 (raw non-ASCII bytes in the target, whitespace before a colon, obs-fold, HTTP/0.9 or non-HTTP bytes, oversized header lines), TS refuses with a status of 400 or above where the oracle answers 0.9-style, with 403/431, or with 200 on mojibake. Law F-1 (§3.4) forbids the opposite direction | R4: one HTTP framing law for the product view, or a decision to keep F-1 |
 | G16 | A non-GET method gets a response whose body and exact status are not a contract. Both runtimes must answer with a status of 400 or above, pass the P21 guard and response policy first (§2.1), and write nothing. A test proves no store change | R5 |
 
 ## 5. K: the plugin contract now, the builder at R4 (Q2)
@@ -252,7 +274,8 @@ An accepted invariant cannot be reclassified as a deferred gap just to keep the 
 
 Amendments applied in this revision:
 - P22 and P23 (§5.1), added after Codex's STOP on PR 2. Lam approved them at c39dded.
-- P24 (§5.2), added after Codex's second STOP; awaiting Lam.
+- P24 (§5.2), added after Codex's second STOP. Lam approved it at 0969423.
+- §3.4 Law F-1 and G17, from Aux's differential fuzz of PR #38; awaiting Lam.
 - F1: Origin must match the request's own Host.
 - F2: fail-closed header handling and negative tests.
 - F3: the security headers apply to every method and every status.
