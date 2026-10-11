@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+import tempfile
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +29,10 @@ ENV_PROFILE = "TRAJECTA_IDENTITY_PROFILE"
 DEFAULT_PROFILE = "example"
 LAST_FILE = ".last-profile"
 MAX_PROFILE_BYTES = 256 * 1024
+
+
+class ProfileConflict(ValueError):
+    """An imported profile differs from the installed recipe (P25)."""
 
 
 def _last_path(env: dict[str, str] | None = None) -> Path:
@@ -59,15 +66,57 @@ def _check(data: Any, origin: str) -> dict[str, Any]:
     return data
 
 
-def _install(data: dict[str, Any], env: dict[str, str] | None = None) -> str:
+def _install(data: dict[str, Any], env: dict[str, str] | None = None,
+             *, replace_profile: bool = False) -> str:
     """Copy a profile into the data dir and return its name."""
 
     name = str(data["name"]).strip()
     target = data_dir(env=env) / "profiles" / safe_fs_name(name)
+    installed = target / "profile.json"
+    if installed.exists():
+        old = installed.read_bytes()
+        incoming = (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        if old == incoming:
+            return name
+        if not replace_profile:
+            raise ProfileConflict(
+                f"profile '{name}' differs from the installed copy; pass --replace-profile to overwrite"
+            )
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        base = installed.with_name(f"profile.json.{stamp}.bak")
+        backup = base
+        suffix = 0
+        while True:
+            try:
+                out = backup.open("xb")
+            except FileExistsError:
+                suffix += 1
+                backup = base.with_name(base.name + f".{suffix}")
+                continue
+            try:
+                with out:
+                    out.write(old)
+            except Exception:
+                print(f"profile backup: {backup}", file=sys.stderr)
+                raise
+            break
+        temporary = None
+        try:
+            fd, temporary = tempfile.mkstemp(prefix=".profile-", suffix=".json", dir=target)
+            with os.fdopen(fd, "wb") as out:
+                out.write(incoming)
+            os.replace(temporary, installed)
+        except Exception:
+            print(f"profile backup: {backup}", file=sys.stderr)
+            raise
+        finally:
+            if temporary is not None:
+                Path(temporary).unlink(missing_ok=True)
+        return name
     target.mkdir(parents=True, exist_ok=True)
-    (target / "profile.json").write_text(
-        json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    # Preserve R2d's open-before-encoding behavior on first install (surrogate cases).
+    with installed.open("wb") as out:
+        out.write((json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
     return name
 
 
@@ -87,19 +136,20 @@ def resolve(
     *,
     env: dict[str, str] | None = None,
     remember_choice: bool = True,
+    replace_profile: bool = False,
 ) -> IdentityProfile:
     """Turn a profile spec into a loaded profile (see module docstring)."""
 
     environ = dict(os.environ if env is None else env)
     chosen = (spec or "").strip() or environ.get(ENV_PROFILE, "").strip() or last_profile(env) or DEFAULT_PROFILE
     if chosen.startswith(("https://", "http://")):
-        name = _install(fetch(chosen), env)
+        name = _install(fetch(chosen), env, replace_profile=replace_profile)
         profile = load_profile(name)
     else:
         path = Path(chosen).expanduser()
         if path.is_file() and path.suffix.lower() == ".json":
             data = _check(json.loads(path.read_text(encoding="utf-8")), str(path))
-            profile = load_profile(_install(data, env))
+            profile = load_profile(_install(data, env, replace_profile=replace_profile))
         else:
             profile = load_profile(chosen)
     if remember_choice:

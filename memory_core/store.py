@@ -452,14 +452,35 @@ class MemoryStore:
             return migrated_store
 
         if dry_run:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryDirectory(prefix="trajecta-migrate-dry-run-", dir=target.parent) as tmp:
-                rehearsal = migrate_copy(Path(tmp) / target.name)
-                return {
-                    "state": rehearsal.schema_info()["state"],
-                    "from": before["state"],
-                    "dry_run": True,
-                }
+            created = []
+
+            def make_parent(path: Path) -> None:
+                try:
+                    path.mkdir()
+                except FileNotFoundError:
+                    make_parent(path.parent)
+                    make_parent(path)
+                except FileExistsError:
+                    if not path.is_dir():
+                        raise
+                else:
+                    created.append(path)
+
+            try:
+                make_parent(target.parent)
+                with tempfile.TemporaryDirectory(prefix="trajecta-migrate-dry-run-", dir=target.parent) as tmp:
+                    rehearsal = migrate_copy(Path(tmp) / target.name)
+                    return {
+                        "state": rehearsal.schema_info()["state"],
+                        "from": before["state"],
+                        "dry_run": True,
+                    }
+            finally:
+                for path in reversed(created):
+                    try:
+                        path.rmdir()
+                    except OSError:
+                        pass  # Another process's files/directories are never removed.
 
         source_version = before["state"].rsplit("v", 1)[1]
         backup = (

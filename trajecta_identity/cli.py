@@ -70,6 +70,7 @@ def parser() -> argparse.ArgumentParser:
         help="profile name, folder, .json file or http(s) URL (default: last used, then 'example')",
     )
     root.add_argument("--db", type=Path, help="override the database path")
+    root.add_argument("--replace-profile", action="store_true", help="back up and replace a differing imported profile")
     commands = root.add_subparsers(dest="command", required=True)
     commands.add_parser("init", help="bootstrap anchors, VHO and the core")
     setup = commands.add_parser("setup", help="bootstrap and print the MCP config for your agent client")
@@ -183,7 +184,7 @@ def _execute(args) -> None:
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
-    profile = resolve(args.profile, remember_choice=command != "doctor")
+    profile = resolve(args.profile, remember_choice=command != "doctor", replace_profile=args.replace_profile)
     memory = IdentityMemory(profile, args.db, surface="cli")
     if command == "init":
         result = memory.bootstrap()
