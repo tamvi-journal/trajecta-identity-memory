@@ -28,7 +28,9 @@ def check(wheel):
         assert cwd != ROOT and ROOT not in cwd.parents
         location = subprocess.check_output([str(python), "-c",
             "import trajecta_identity; print(trajecta_identity.__file__)"], cwd=cwd, env=env).decode().strip()
-        assert Path(location).is_relative_to(environment)
+        # Framework Python on macOS resolves /var through /private/var. Verify
+        # actual filesystem ownership, including aliases, not lexical spelling.
+        assert Path(location).resolve().is_relative_to(environment.resolve()), (location, str(environment))
         process = subprocess.Popen([str(python), "-m", "trajecta_identity.cli", "--profile", "example",
                                     "view", "--port", "0", "--no-browser"],
                                    cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
