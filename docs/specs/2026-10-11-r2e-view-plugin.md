@@ -173,6 +173,34 @@ Under §7, an accepted invariant cannot become a deferred gap. Both are fixed in
 
 Both patches belong to the Python plugin payload, which R4 replaces with a Node payload. The R4 builder must still pass K2 and K5 (§5).
 
+### 5.2 P24: the Windows launcher breaks K4 (Codex STOP @ e319112)
+
+Codex's K4 test fails against today's Windows `launch.py`. It applies defaults with `env.setdefault(key, os.path.expanduser(value))`:
+- **`$HOME/…` is not expanded.** `expanduser` only handles `~`, so a default of `$HOME/data` reaches the server as the literal text `$HOME/data`.
+- **An empty value counts as set.** `setdefault` keeps an existing empty string. The POSIX launcher (`[ -n "$KEY" ] || KEY=…`) treats an empty value as unset and applies the default. The two launchers disagree.
+
+Aux re-audited K1–K5 against `plugin.py` at e319112. Apart from P22/P23 (§5.1), these two points are the only remaining K4/K5 divergences. The POSIX launcher already meets K4.
+
+**P24 — Windows launcher env defaults (narrow oracle patch, PR 2).** For each default `KEY=value` rendered into `launch.py`:
+1. If `os.environ.get(KEY)` is a **non-empty** string, it is used unchanged, byte for byte. There is no expansion and no normalization. An empty string counts as unset, the same as `[ -n ]` on POSIX.
+2. Otherwise, if `value` starts with exactly `~/` or `$HOME/`, the launcher computes `home = os.path.expanduser("~")`. That is Python's own Windows rule: `USERPROFILE`, else `HOMEDRIVE`+`HOMEPATH`. **`HOME` is not consulted on Windows.** The default becomes `home` followed by the rest after the prefix, with the forward slashes kept as written.
+3. If the home folder cannot be resolved (`expanduser("~")` returns `"~"`), the launcher writes `<server>: cannot resolve home folder for <KEY>` and a newline to stderr, exits 1, and starts no server.
+4. Any other `value` is used verbatim. There is no `expandvars` and no `~user` handling, which matches the POSIX `_sh_value` quoting.
+
+The POSIX launcher does not change.
+
+**Tests (PR 2), using the launcher seam with isolated `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH` and `HOME`:**
+- `~/x` and `$HOME/x` both resolve to `<USERPROFILE>/x`.
+- A preset non-empty value wins byte for byte, even when it contains `~` or `$HOME`.
+- A preset empty value gets the default.
+- With `USERPROFILE` unset, `HOMEDRIVE`+`HOMEPATH` is used.
+- With no home source at all, the refusal and exit 1 apply, and no server starts.
+- A plain value such as `D:/data` passes verbatim.
+- K3 still holds.
+- As with P23, the seam is not a claim of a real Windows run.
+
+**Codex process note.** Before the next report, run all of K1–K5 and P21–P24, and report every remaining violation in one STOP, not one at a time.
+
 ## 6. R5 (proposed, not settled here): the view as the product screen
 
 This section only records direction, so that R2e's API freeze (§3.1) does not block it. It opens as its own spec after R4.
@@ -223,7 +251,8 @@ An accepted invariant cannot be reclassified as a deferred gap just to keep the 
 - **Repo:** separate engines, a thin R4 product layer, a unified R5 experience, and no early monorepo merge (§6).
 
 Amendments applied in this revision:
-- P22 and P23 (§5.1), added after Codex's STOP on PR 2; awaiting Lam.
+- P22 and P23 (§5.1), added after Codex's STOP on PR 2. Lam approved them at c39dded.
+- P24 (§5.2), added after Codex's second STOP; awaiting Lam.
 - F1: Origin must match the request's own Host.
 - F2: fail-closed header handling and negative tests.
 - F3: the security headers apply to every method and every status.
