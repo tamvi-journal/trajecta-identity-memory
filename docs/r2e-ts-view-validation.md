@@ -11,7 +11,8 @@ Base: `d42fcb5`. Contract: `2026-10-11-r2e-view-plugin.md`, sections 3 and 8.
 - Cue decoding retains Python's first nonblank query value, plus conversion, malformed
   percent handling, UTF-8 replacement, whitespace stripping and 2000-code-point cutoff.
 - Stored JSON is parsed losslessly. Output uses the existing Python-compatible writer,
-  typed integer counters, typed rounded accessibility, default separators, and no newline.
+  typed integer counters (including numeric and prototype-looking domain names), typed rounded
+  accessibility, default separators, and no newline.
 - Recall uses `track: false`. G15 remains the isolated disappearance/bootstrap exception.
 - CLI bootstrap is limited to `uninitialized`; ready and legacy-v4 stores stay unchanged.
   Browser launch failure is ignored; Ctrl+C closes the server.

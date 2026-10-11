@@ -244,7 +244,7 @@ for (const expectation of ["100-continue", "unexpected"]) {
   });
 }
 
-test("stored domain names cannot change integer counter JSON types", async () => {
+test("stored domain names cannot change integer counter JSON types or key order", async () => {
   const root = temporary(),
     memory = new IdentityMemory(PROFILE, resolve(root, "store.sqlite3"), { clock: new InjectedClock() });
   memory.bootstrap();
@@ -258,12 +258,27 @@ test("stored domain names cannot change integer counter JSON types", async () =>
     evidence: { evidence_type: "outside", source_ref: "test", content_summary: "test" },
     idempotencyKey: "counter",
   });
+  for (const domain of ["2", "10", "1", "__proto__", "constructor", "toString"])
+    memory.store.createCurrent({
+      recordId: "counter:" + domain,
+      recordClass: "event",
+      domain,
+      title: "Counter",
+      actor: "test",
+      reason: "synthetic",
+      evidence: { evidence_type: "outside", source_ref: "test", content_summary: "test" },
+      idempotencyKey: "counter:" + domain,
+    });
   const server = await startView(memory, { port: 0 }),
     before = inventory(root);
   try {
     const response = await request(server, { path: "/api/snapshot" });
     assert.equal(response.status, 200);
-    assert.match(response.body.toString(), /"records": \{"confidence": 1, /u);
+    assert.match(
+      response.body.toString(),
+      /"records": \{"1": 1, "10": 1, "2": 1, "__proto__": 1, "confidence": 1, "constructor": 1, /u,
+    );
+    assert.match(response.body.toString(), /"toString": 1/u);
     assert.deepEqual(inventory(root), before);
   } finally {
     await server.close();

@@ -19,6 +19,7 @@ import { ValueError } from "./errors.ts";
 import type { IdentityMemory } from "./identity.ts";
 import { parseLossless } from "./json.ts";
 import { outputJson } from "./mcp.ts";
+import type { Row } from "./store.ts";
 
 const PAGE = readFileSync(new URL("../assets/view.html", import.meta.url));
 const asciiLower = (value: string): string => value.replace(/[A-Z]/g, (c) => c.toLowerCase());
@@ -52,15 +53,28 @@ export function snapshot(memory: IdentityMemory): unknown {
     .map((row) => ({ from: row.from_record_id, type: row.relation_type, to: row.to_record_id }));
   const core = memory.store.currentView("core");
   const status = memory.status();
+  const statusRows = memory.store.currentView().filter((row) => row.domain !== "anchor");
   // Counter keys come from stored domain names; even a domain named "confidence"
   // is an integer counter, not a field whose name selects a floating-point value.
-  const counters = (value: Record<string, number>) =>
-    orderedObject(Object.entries(value).map(([key, count]) => [key, pyInt(count)]));
+  const counters = (key: (row: Row) => string) => {
+    // Map preserves current_view's order and treats numeric/prototype-looking domain
+    // names as ordinary keys, just like Python's dictionaries.
+    const counts = new Map<string, number>();
+    for (const row of statusRows) {
+      const name = key(row);
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+    return orderedObject(Array.from(counts, ([name, count]) => [name, pyInt(count)]));
+  };
   return {
     profile: memory.profile.name,
     agent: memory.profile.agent,
     owner: memory.profile.owner,
-    status: { ...status, records: counters(status.records), activation: counters(status.activation) },
+    status: {
+      ...status,
+      records: counters((row) => String(row.domain)),
+      activation: counters((row) => stateOf(row, memory.activation, PINNED)),
+    },
     core: core.length
       ? {
           title: core[0].title,
