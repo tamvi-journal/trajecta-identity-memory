@@ -1,6 +1,6 @@
 # R4: the Trajecta product layer, installer, and cutover
 
-Status: draft for Lam's review. Author: Aux (leader). Builds on R0–R3 and R2e (main @ efa5149).
+Status: revised after Lam's review @ b121be5 (REQUEST CHANGES: F40-1..F40-4; Q1–Q8 yes with conditions; §11). Author: Aux (leader). Builds on R0–R3 and R2e (main @ efa5149).
 
 ## 0. Goal, and what "done" means
 
@@ -28,19 +28,53 @@ R2e settled the product layer's rule. It **coordinates the engines and is never 
 | Install today | `install/install.sh` and `install.ps1` create a Python venv and run `setup`. The Python `plugin` packs Python sources |
 | Carries | **K6** (single version in `plugin.json`); **R4 carry from #35**: Windows `.mcp.json` boots through `python`; **#37 nit**: `tests.yml` hard-codes the 0.4.0 wheel name; **G13**; **G14**; **G17** (owner R4); `import-aml` (Python only) |
 
-## 2. Product layer: the `trajecta` repo (Q1)
+## 2. Product layer: the `trajecta` repo and the release artifact (Q1; F40-1)
 
-A new repo, `tamvi-journal/trajecta` (Apache-2.0). It is thin, and it owns only product-level concerns:
+A new repo, `tamvi-journal/trajecta` (Apache-2.0). It is thin, and it owns only product-level concerns: the release build, the installer, the product CLI, `compat.json`, the plugin builder and release evidence.
 
-- **`package.json`**:
-  - `name: trajecta`, with the single product version (§3);
-  - the engines as **exact pinned dependencies**: git URL + commit SHA, plus a lockfile with integrity hashes;
-  - `bin: trajecta`.
-- **`src/cli.ts`**, the product CLI. It dispatches to the engines and adds only product verbs: `install`, `doctor`, `plugin`, `version`, `uninstall`. `trajecta identity …` and `trajecta work …` pass straight through to the engine CLIs, so their output is byte for byte the engine's.
-- **`compat.json`**: the compatibility matrix. Product version → engine SHAs → supported Node majors and OSes → the store schema versions it reads and writes. CI generates it and checks it. It is never hand-edited.
-- **Release evidence**: each release attaches the CI run IDs and the M-gate receipts (§8).
+### 2.1 Engines are vendored at exact SHAs, never resolved at install time
 
-The layer **must not** write to either store except through an engine API. A test scans the product source and rejects any direct SQLite or work-store file write.
+Both engines have **zero npm dependencies**: no `dependencies` and no `devDependencies` (checked at efa5149 and 05c1139). So the product needs no `node_modules`, no registry and no Git at install time.
+
+- `engines.lock.json` in the product repo pins, for each engine:
+  - the repo URL;
+  - the commit SHA;
+  - the **subdirectory** to take (`node/` for identity, the repo root for work);
+  - the explicit list of runtime paths to copy (identity: `src`, `schema.sql`, `tables`, `assets`, `package.json`; work: `src`, `assets`, `package.json`);
+  - the SHA-256 of every copied file.
+- `tools/build-release.ts` fetches each pinned SHA, copies exactly those paths into `engines/identity/` and `engines/work/`, and **fails** if any file's SHA-256 differs from the lock. The lock is regenerated only by an explicit `tools/pin-engines.ts <sha>`, and that change is reviewed like code.
+- The product imports engines only through relative paths (`../engines/identity/src/index.ts`). There is no package-name resolution.
+
+### 2.2 The release artifact is one deterministic tarball
+
+`trajecta-<ver>.tar.gz` holds a single top directory `trajecta-<ver>/` with:
+- `product/` (the product source and `package.json`);
+- `engines/identity/` and `engines/work/`;
+- `bin/` (the OS-native wrappers, §5.3);
+- `MANIFEST.json`, which records every file's path, size and SHA-256, the engine SHAs, the product version and the supported Node range.
+
+**Deterministic:** entries are sorted, file mtimes are fixed, uid/gid are 0, modes are 0644 or 0755, and gzip runs with `-n`. Two builds from the same commits produce **byte-identical** tarballs. CI proves this by building twice.
+
+It is **not** `npm pack`. npm publish is not used in R4.
+
+### 2.3 CLI and bin names
+
+- The product owns the only `trajecta` command.
+- The work engine's own `trajecta` and `trajecta-work-mcp` bins are **not** exposed by the product, so there is no collision. Its CLI is reached as `trajecta work …` and its MCP server through the plugin. The work repo is unchanged.
+- **Pass-through contract:** `trajecta identity …` and `trajecta work …` spawn the engine CLI as a child process with:
+  - the exact argv;
+  - stdin piped byte for byte;
+  - the same cwd and environment.
+- They return the child's stdout and stderr bytes and its exit code unchanged. M2 proves this over the whole cli-v1 corpus, error cases included, plus the work CLI suite.
+
+### 2.4 Authority: the product never writes a store itself (F40-4)
+
+- **Adapter.** All engine use goes through one module, `src/engines.ts`, which exposes only the engines' public functions. Any other import of an engine's internals, or of `node:sqlite`, is a build error, enforced by a lint rule plus a source scan.
+- **Differential authority test (M2).** For every product verb that can touch a store (`install` bootstrap, `doctor`, the pass-throughs):
+  - run the verb on a store copy;
+  - run the equivalent engine-only command on another copy;
+  - the resulting store bytes must be identical.
+- **Write-trace test (M2).** A test-only `--import` hook records every filesystem write the product process makes. Writes outside the install root, the plugin output path and engine-mediated store paths fail the test.
 
 ## 3. One version (closes K6)
 
@@ -53,48 +87,95 @@ The layer **must not** write to either store except through an engine API. A tes
 
 ## 4. Runtime: Node (Q2, Q3)
 
-- **v1 requires a system Node** that is an LTS major from the supported set. No Node binary is bundled in R4. The buyers are agent builders, who already run Node. Bundling, through Node SEA or a vendored binary, becomes R4b only if beta feedback asks for it.
+- **v1 requires a system Node** that is an LTS major from the supported set. This is a decision for the **developer beta only** (Lam Q2). It is not a claim that every buyer has Node. No Node binary is bundled in R4. Bundling, through Node SEA or a vendored binary, is R4b, before any non-developer release.
 - **The supported set is Node 22 (≥22.19) and Node 24 (Q3).**
   - Node 22 enters maintenance in April 2027, and a late-2026 buyer is likely on Node 24.
   - To certify Node 24, both engines' conformance suites (R0 golden, authority-v2, writes-v5, mcp-v1, cli-v1, view-v1, R3 X/Z) run on Node 22 and Node 24, on all 3 OSes, with zero tolerance. A divergence on 24 is a STOP under the scope fence.
   - The identity engine's `engines` field widens to `>=22.19 <23 || >=24 <25` only after that matrix is green.
 - **`node:sqlite`**: both majors run the same pinned behavior checks. Journal mode, `BEGIN IMMEDIATE`, busy translation and the header-mask rules from R3 are re-proven on 24. The SQLite version Node bundles is recorded in `compat.json`.
 
-## 5. Installer (`trajecta install`)
+## 5. Installer (F40-2, F40-3)
 
-**How it is delivered:**
-- a release asset `trajecta-<ver>.tgz` (an `npm pack` of the product with its engines, lockfile-pinned);
-- plus `install.sh` and `install.ps1`, which only verify the tarball's SHA-256 against the release manifest and run `node <tarball>/bin install`.
+### 5.1 Trust anchor
 
-npm publish is optional and not required (Q4).
+- Each release publishes three files:
+  - `trajecta-<ver>.tar.gz`;
+  - `release.json`, which holds the version, the tarball's SHA-256 and size, and the engine SHAs;
+  - `release.json.sig`, an **Ed25519** signature over the exact bytes of `release.json`.
+- The **Ed25519 public key is embedded** in `install.sh` and `install.ps1` and published in the product README. A checksum alone only proves consistency; the signature proves the release came from the key holder.
+- The signing key is a GitHub Actions secret, usable only from the `release` environment, which requires the owner's manual approval (Q9). The key never leaves that environment.
+- Rotating the key needs a new script release that is signed by the old key.
 
-**Steps.** Each step is idempotent, and each failure leaves the system as it was:
-1. **Node check.** Look for a `node` on PATH, then known locations (Homebrew, nvm/fnm/volta shims, `%ProgramFiles%\nodejs`). Probe each candidate's major and minor version against the supported set. If none passes: `trajecta: need Node 22.19+ or 24 LTS` on stderr, exit 1, and no change to anything (same shape as K5).
-2. **Install root.**
-   - The default is `~/.trajecta/<ver>/` on macOS and Linux, and `%LOCALAPPDATA%\Trajecta\<ver>\` on Windows. It is versioned, so an upgrade never overwrites a running version.
-   - A `current` pointer is written last, atomically: a symlink on POSIX, a `current.json` file on Windows.
-3. **Launcher.** `trajecta` (or `trajecta.cmd`) goes into a user bin directory already on PATH. If none is on PATH, the installer prints the one line to add. It never edits shell rc files.
-4. **Profile and stores.**
-   - It resolves the identity profile and work root exactly as the engines do. There is no new resolution law.
-   - It bootstraps **only a missing store**.
-   - An existing store is opened read-only by `doctor` (P10). Any migration goes through `migrate-to`, with its backup law (R2d A10, R3 §3.6), and only after explicit confirmation on a TTY.
-5. **Claude plugin, built locally** (§6) and placed in a folder the installer prints. It **never edits** Claude's or any other client's config files. The user installs the `.plugin` file themselves, or pastes the printed MCP config.
-6. **`trajecta doctor`** runs last. The install reports success only if doctor passes.
+### 5.2 Steps, and the transaction boundary
 
-**`trajecta uninstall`** removes only the install root, the launcher and the built plugin file. It **never** touches stores, profiles or client configs. It prints where the data remains.
+`install.sh` and `install.ps1` are the only code that runs before verification. They are short, and they are reviewed as security code.
 
-**Upgrade from a Python install:**
-- The installer **detects** an old venv install (`install/` layout, a Python plugin, an MCP config whose command is a Python interpreter).
-- It **reports** what it found and the exact replacement config.
-- It changes none of it. Replacing a client config is the owner's action, done with the printed instructions.
+**Phase A: verify and stage.** Nothing visible to the user changes in this phase. A failure here deletes only the staging directory this run created.
+1. **Probe Node.** Look on PATH, then in known locations (Homebrew, nvm/fnm/volta shims, `%ProgramFiles%\nodejs`), version-probing each candidate against the supported set. If none passes, write `trajecta: need Node 22.19+ or 24 LTS` to stderr, exit 1, and change nothing.
+2. **Verify the release.** Check `release.json.sig` with the embedded key, using an **inline** verifier run by the probed Node (`node -e`, with `crypto.verify('ed25519')`). Then check the tarball's SHA-256 and size against `release.json`. Any mismatch → exit 1.
+3. **Extract** with the system `tar` (macOS/Linux, and `tar.exe` on Windows 10+) into `<root>/.staging-<ver>-<random>/`.
+   - Refuse any entry that is absolute, contains `..`, is a symlink, or is a hardlink.
+   - Check every extracted file against `MANIFEST.json` (path set and SHA-256).
+4. **Run the real entrypoint:** `node <staging>/trajecta-<ver>/product/src/cli.ts install --staged <staging>`.
+5. **Run `doctor` from staging, read-only**, against the existing stores if any. A failing doctor stops the install here.
 
-## 6. TS plugin builder with a Node payload (from R2e K)
+**Phase B: commit.** This is the only switch point.
 
-`trajecta plugin` builds the `.plugin` file. It satisfies K1–K6, with these changes for the Node payload:
-- **Payload:** the installed product, referenced by absolute path. It is **not copied**: the plugin points at `<install root>/current`, so an upgrade does not require rebuilding the plugin. K3 reproducibility is defined given the same install root path.
-- **`.mcp.json` command:** the **absolute path of the Node binary found at install time** (closes the #35 carry). The plugin does not boot through `python` or a bare `node`. The launcher script still re-probes the version (P23 shape), and if the Node binary has since vanished it refuses with `<server>: need Node …`.
-- **K4:** environment defaults use the P24 rules on Windows and the `_sh_value` rules on POSIX. Neither changes.
+6. **Rename** `<staging>/trajecta-<ver>` to `<root>/<ver>`, on the same volume. If `<root>/<ver>` already exists and its `MANIFEST.json` digest matches, reuse it. If it exists with a different digest → exit 1.
+7. **Write `<root>/<ver>/.installed.json`.** It lists every path this install owns, with its SHA-256, including the launcher and plugin paths written in Phase C.
+8. **Update the pointer atomically (§5.3).** The previous version is appended to `<root>/history.json` for rollback.
+
+**Phase C: post-commit, idempotent.** Running `trajecta install` again resumes here.
+
+9. **Launcher.** Write it only if it is absent or already owned (its hash is in a `.installed.json`); otherwise leave it and report.
+10. **Plugin file (§6).**
+11. **Store bootstrap,** only for a store that does not exist yet.
+    - A bootstrapped empty store is a **valid state**. It is not rolled back: a later failure leaves it, and the next install or `doctor` reports it.
+    - An existing store is never modified by install. Migration happens only through `migrate-to`, with a TTY confirmation.
+12. **`doctor`.** A failure here exits non-zero. The new version stays committed, so the user can run `trajecta install --rollback` to restore the pointer from `history.json`.
+
+**Re-entry invariants:**
+- A run interrupted in Phase A leaves at most a `.staging-*` directory, which the next run removes.
+- After step 8, the system runs either the old version or the new one, never a mix.
+- Phase C steps are idempotent.
+
+### 5.3 The pointer, launchers and the MCP bootstrap wrapper (one design for all OSes)
+
+- **Pointer:** `<root>/current` is a **text file** holding only the version string. It is not a symlink and not a directory.
+  - Updates write `current.tmp`, flush it, then `rename` it over `current`. That is `MoveFileExW` with replace-existing on Windows, which is atomic on the same NTFS volume, and POSIX `rename(2)` elsewhere.
+- **Node path:** `<root>/node` is a text file holding the absolute path of the Node binary probed at install time.
+- **Launchers** are **OS-native**, so they run even when Node is gone:
+  - POSIX: `<root>/bin/trajecta` (sh) and `<root>/bin/trajecta-mcp` (sh).
+  - Windows: `<root>\bin\trajecta.cmd` and `<root>\bin\trajecta-mcp.cmd`.
+  - Each one reads `current` and `node`, re-probes that Node's version, and on failure writes `trajecta: need Node 22.19+ or 24 LTS` (or `<server>: need …` for the MCP wrapper) to stderr and exits 1.
+  - Otherwise it runs `"<node>" "<root>/<ver>/product/src/cli.ts" …` with stdio passed through.
+- **Install root:** `~/.trajecta/` on POSIX and `%LOCALAPPDATA%\Trajecta\` on Windows. The user bin directory gets a copy or link of the `trajecta` launcher. If that directory is not on PATH, the installer prints the one line to add. It never edits shell rc files.
+
+### 5.4 Uninstall
+
+- `trajecta uninstall` removes **only paths listed in `.installed.json` whose current SHA-256 still matches**.
+- A changed or unlisted file is kept and reported.
+- A directory is removed only if this install created it **and** it is empty.
+- Stores, profiles and client configs are never touched. The command prints where the data remains.
+
+### 5.5 Upgrade from a Python install
+
+- The installer **detects** an old venv install (the `install/` layout, a Python plugin, or an MCP config whose command is a Python interpreter).
+- It **reports** what it found and prints the exact replacement config.
+- It changes none of it. Replacing a client config is the owner's action (Q7).
+
+## 6. TS plugin builder with a Node payload (from R2e K; F40-3)
+
+`trajecta plugin` builds the `.plugin` file, which satisfies K1–K6.
+
+- **`.mcp.json` command:** the **OS-native MCP wrapper**:
+  - POSIX: `{"command": "/bin/sh", "args": ["<root>/bin/trajecta-mcp", "<server>", …]}`.
+  - Windows: `{"command": "cmd.exe", "args": ["/d", "/c", "<root>\\bin\\trajecta-mcp.cmd", "<server>", …]}`.
+  - `/bin/sh` and `cmd.exe` always exist. So when Node vanishes, the **wrapper** still runs and prints the refusal. This replaces the earlier "absolute Node path" design, because spawning a missing binary fails before any script runs. It closes the #35 carry.
+- **The payload is not copied:** the wrapper resolves `current`, so an upgrade needs no plugin rebuild. K3 reproducibility is defined given the same install root.
+- **K4:** the environment-default rules are unchanged (P24 on Windows, `_sh_value` on POSIX), and they now live in the wrappers.
 - **K2:** atomic write in the destination folder, as P22.
+- **MCP stdio through `cmd.exe /c`** on Windows is proven end to end in M5: an `initialize` round trip with byte-exact framing.
 
 ## 7. Retiring the Python writer, and deciding G13, G14, G17 and import-aml
 
@@ -103,12 +184,12 @@ npm publish is optional and not required (Q4).
   - The Python `plugin`, `setup` and `mcp_server` entry points stay importable, because the oracle and CI need them, but they are **not shipped**.
   - The README's install section moves to the product.
   - **The oracle stays in CI as a reader for one release.** All corpora keep running against Python until the release after 0.5.0.
-- **G13 → P25, refuse silent profile overwrite (both runtimes).**
+- **G13 → P25, refuse silent profile overwrite.** This is an explicit **oracle patch in both runtimes**: Python is patched first, then TS. The corpus diff is audited: the old G13 case is removed **by name** and its replacement cases are added. No other corpus byte may change except MANIFEST digest fields, and those are checked mechanically as in #37.
   - If a `.json` or URL profile would overwrite an installed profile of the same name, and the canonical JSON bytes differ, the command refuses with a typed error (`ProfileConflict: profile '<name>' differs from the installed copy; pass --replace-profile to overwrite`) and exits 1, with no write.
   - `--replace-profile` keeps today's overwrite, after writing a backup `profile.json.<UTC timestamp>.bak`.
   - Identical bytes are a no-op.
   - The corpus case that pins today's overwrite is replaced by three cases: conflict, replace and identical.
-- **G14 → P26, a dry run leaves nothing (both runtimes).**
+- **G14 → P26, a dry run leaves nothing.** This is an explicit **oracle patch in both runtimes**, with the same audited-diff rule as P25. The frozen R2d G14 history stays in the R2d spec; it is superseded, not rewritten.
   - `migrate-to --dry-run` records every parent directory it created.
   - On exit, success or failure, it removes exactly those, deepest first, and only if they are still empty.
   - A directory that existed before the dry run is never touched.
@@ -121,10 +202,10 @@ npm publish is optional and not required (Q4).
 | Gate | What it proves |
 |---|---|
 | **M1 engine matrix** | Every identity corpus and R3 X/Z, plus the work engine suite, on {macOS, Windows, Linux} × {Node 22, Node 24} |
-| **M2 product contract** | Pass-through CLI output equals the engine bytes. The "no direct store writes" scan is clean. `compat.json` is regenerated and its diff is empty |
-| **M3 clean-machine install** | On fresh GitHub runners for each OS, using a runner image without Node and then with Node 22 and with Node 24: a refusal without Node, then install → doctor → `identity retrieve` → `work` round trip → uninstall. Store bytes are unchanged by uninstall |
+| **M2 product contract** | **Pass-through:** over the full cli-v1 corpus and the work CLI suite, argv, stdin, cwd and env are preserved, and stdout, stderr and exit code are byte-exact (§2.3). **Authority:** the adapter lint and source scan are clean, the differential authority test passes, and the write-trace test passes (§2.4). **Build:** two builds produce byte-identical tarballs, `MANIFEST.json` verifies, and `compat.json` is regenerated with an empty diff. **Offline:** in a network-disabled sandbox, the tarball is unpacked, `trajecta version` reports both engine SHAs, and an identity `retrieve` and a `work` round trip run with no Git or npm access |
+| **M3 clean-machine install** | On each OS, with Node 22 and with Node 24: install → doctor → `identity retrieve` → `work` round trip → uninstall. Store bytes are unchanged by uninstall, and `.installed.json` ownership is respected (a modified launcher is kept). **The no-Node case runs in a proven isolated environment:** a Linux container image that has no `node` (asserted with `command -v node` failing first); on macOS and Windows, PATH and the known-location roots point at an empty temp tree, and the test first asserts that the probe list resolves nothing. **Faults are injected** at every Phase A/B/C step boundary (signature, SHA, a tar path-traversal entry, a file digest, doctor, the rename, the pointer write, the plugin write). Each must land in the state §5.2 promises, and re-running install must converge |
 | **M4 upgrade from Python** | A fixture with the old venv install and an R3-era store: the installer detects it, prints the replacement, changes nothing, and the TS runtime reads and writes the store under the R3 laws |
-| **M5 plugin** | K1–K6 exact. The `.mcp.json` command is the absolute Node path. The launcher refuses when that Node is removed |
+| **M5 plugin** | K1–K6 exact. The `.mcp.json` command is the OS-native wrapper. With Node removed, the wrapper prints the `<server>: need …` refusal and exits 1. With Node present, an MCP `initialize` round trip through the wrapper is byte-exact on all 3 OSes, including Windows `cmd.exe /c` |
 | **M6 P25/P26** | Both runtimes, new corpus cases, three seeds |
 | **M7 oracle reader** | The Python oracle still passes every corpus against TS-written stores (one-release rule) |
 | **M8 owner rehearsal** | Ty's real-copy M receipt (R3 §4) on the release candidate. **This gates the release tag, not the merges.** |
@@ -149,3 +230,16 @@ Merge rule: unchanged. Lam approves the exact head, CI is green on that head, th
 - **Q6:** Should `import-aml` be archived rather than ported? Aux: yes.
 - **Q7:** Should the installer only print a replacement for an old Python MCP config, never edit it? Aux: yes. Client configs belong to the owner (standing safety rule).
 - **Q8:** Should the product version be 0.5.0? Aux: yes. It sorts after everything a user has seen.
+- **Q9 (new, F40-2):** Should the Ed25519 release key be a GitHub Actions secret, usable only from the `release` environment with Ty's manual approval? The alternative is an offline key that Ty holds and uses with a one-command signing tool. Aux: the Actions secret with owner approval. Ty is non-technical, and environment approval gives her a real veto without key handling.
+
+## 11. Lam's review @ b121be5, and how it was applied
+
+- **F40-1 (package):** §2.1–§2.3. Both engines have zero dependencies, so they are vendored by exact SHA with per-file digests. The release is a deterministic tarball with a `MANIFEST.json`, not `npm pack`. The bin collision is resolved. Offline unpack-and-run acceptance is in M2.
+- **F40-2 (install):** §5.1 and §5.2. There is a signed `release.json` with an embedded Ed25519 key, and the flow is verify → stage → file-verify → real entrypoint → read-only doctor → rename → owned-paths manifest → atomic pointer. The failure and re-entry invariants are explicit for each phase. The no-Node case is proven isolated in M3.
+- **F40-3 (plugin/Windows):** §5.3 and §6. A single text-file pointer works on every OS. OS-native sh/cmd wrappers can refuse when Node is gone. Windows MCP stdio through `cmd.exe /c` is tested in M5.
+- **F40-4 (contract/authority):**
+  - §2.3: the pass-through preserves argv, stdin, cwd and env, and returns stdout, stderr and the exit code byte-exact.
+  - §2.4: the adapter rule, plus differential authority and write-trace runtime tests.
+  - §5.2: transaction boundaries, with the bootstrapped empty store declared a valid uncompensated state.
+  - §5.4: uninstall removes owned, unchanged paths only.
+- **Q1–Q8:** yes, with Lam's conditions recorded inline. Q2 is for the developer beta only. Q3 holds after full 3-OS certification. Q4 holds after F40-1/F40-2. Q6 archives `import-aml` with its history kept. P25/P26 are explicit both-runtime oracle patches with audited corpus diffs (§7).
