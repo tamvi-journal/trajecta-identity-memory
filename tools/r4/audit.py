@@ -54,6 +54,12 @@ def compare(name, old, new, old_source, new_source, table_source):
     a, b = old["MANIFEST.json"], new["MANIFEST.json"]
     left, left_spans = json_spans(a)
     right, right_spans = json_spans(b)
+    # Both historical and generated MANIFESTs use this exact deterministic writer.
+    # Authenticate it before masking maps: their key order/format cannot hide drift.
+    for raw, value in ((a, left), (b, right)):
+        canonical = (json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                separators=(",", ":")) + "\n").encode("utf-8")
+        assert raw == canonical, (name, "manifest byte format/order changed")
     assert left.keys() == right.keys(), (name, "manifest top-level keys")
     changes = []
     fields = [("files",), ("oracle_sources",)]
