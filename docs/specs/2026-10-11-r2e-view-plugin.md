@@ -111,12 +111,50 @@ Python generates the corpus. TS must match it byte for byte.
 - **Cross-runtime:** the Python view serves a store written by TS, and the TS view serves a store written by Python, through the R3 X harness. The responses equal those on a single-runtime store.
 - **OS matrix:** the same three OSes as R3.
 
+### 3.4 HTTP framing outside view-api/v1 (Aux review of PR #38 @ 08e9ccf)
+
+Aux ran a differential fuzz: the Python worker and the TS worker on copies of the view-fixture store, sent the same raw socket bytes, whole and in 3-byte chunks.
+- **Valid requests:** a 1,500-case random percent-encoded cue fuzz and every valid edge case match exactly. The edge cases covered pipelining, `Expect`, LF framing, unknown methods, absolute-form, `//`, `;params`, dot segments, a percent-encoded path, HEAD, `OPTIONS *`, chunked transfer encoding, and Origin and Host case variants.
+- **Requests that are malformed or over a parser resource limit** produce six differences (Lam F39-1). P21 still holds in both runtimes for all six. In five of them Python is the more permissive side. In one, the header-count limit, **TS is the more permissive side**, and that one is a defect:
+
+| Input | Python | TS |
+|---|---|---|
+| a header block of more than 100 physical lines (see below) | 431 | **200 (serves)** |
+| raw non-ASCII bytes in the request-target (RFC 3986 forbids them; browsers percent-encode) | 200, with the cue decoded as Latin-1 mojibake | 400 |
+| whitespace between the header name and the colon (`Host : …`) | 403 | 400 |
+| an obs-fold continuation of Host | 403 | 400 |
+| an HTTP/0.9 request line, or non-HTTP bytes | a status-less 0.9 reply | 400 or 403 |
+| an oversized header line | 431 | 400 |
+
+**Law F-1. On malformed or over-limit input, the TS view may be stricter than the oracle, never more permissive.** Well-formed HTTP/1.1 that is within the oracle's parser resource limits stays exact.
+- For any request that Python refuses with a status of 400 or above, TS must also refuse with a status of 400 or above, through the common header path, writing nothing.
+- Any request that is well-formed HTTP/1.1 (RFC 9112, with a request-target allowed by RFC 3986) **and** within the oracle's parser resource limits (header-line budget below, 65,536-byte line limit) must match the oracle exactly. That is view-v1 plus the fuzz above.
+- Every refusal carries all six response-policy headers and writes nothing.
+- The header-count case breaks F-1. TS must reproduce the oracle's limit exactly (Codex STOP @ 08e9ccf; Aux checked it against `http.client._read_headers`). The law:
+  - Python appends **every physical header line** to its list before testing `len > 100`. That includes continuation (obs-fold) lines **and the terminating blank line**, and the test runs before the end of the headers is checked.
+  - So a request is refused with **431**, with the body exactly `Too many headers`, through the common header path and with no write, when its header block has more than 100 physical lines counting that blank line. In other words, 99 ordinary fields are served and 100 are refused.
+  - The count uses **raw physical lines** as they arrive: Host, Origin and duplicates each count separately, with no coalescing and no normalization (Lam F39-2).
+  - This check is part of request parsing, so it runs **before** the P21 guard, as in Python. With 100 fields and an evil Host, the answer is 431, not 403. Either refusal would satisfy F-1. The oracle's order is chosen so that the result is exact rather than merely allowed.
+  - **Why the boundary is 99/100 and not 100/101** (answering Lam F39-2 @ 292f27a): Codex probed the unchanged Python view, and Aux read `http.client._read_headers`. The oracle refuses at 100 fields because the terminating blank line counts. A TS that served 100 fields would be more permissive than Python, which F-1 forbids.
+- **Regression tests** (TS, and the same requests against the Python oracle):
+  - 99 fields: 200.
+  - 100 fields: 431.
+  - 101 fields: 431.
+  - 98 fields plus one folded continuation line: Python 200, TS a status of 400 or above.
+  - 99 fields plus one folded continuation line: Python 431, TS a status of 400 or above.
+  - The fold rows check the oracle's line count, which counts continuation lines. They do **not** require TS to accept obs-fold. Any obs-fold, on any header and under any budget, is malformed (RFC 9112 §5.2) and stays a G17 refusal under F-1. TS must not enable `insecureHTTPParser` or otherwise widen what framing it accepts (Codex STOP @ 08e9ccf).
+  - 100 fields with an evil Host: 431.
+  - Every count includes Host. No implicit headers are added.
+  - Every boundary case is sent both whole and in 3-byte fragments. Each one asserts all six policy headers, and that store bytes, mtime and inventory stay unchanged.
+- The other five rows are allowed under F-1 and are frozen as **G17**.
+
 ## 4. Frozen gaps
 
 | Gap | What it is | Decided in |
 |---|---|---|
 | G15 | `snapshot()` bootstraps an `uninitialized` store (V6). The branch is only reachable if the store disappears while serving. Both runtimes keep it. It is an **explicit exception to read purity** (§3.3), pinned by its own corpus case: delete the store while serving, request `/api/snapshot`, and compare the resulting store with a Python bootstrap | R5: a read surface should show an empty state, not write |
 | G16 | A non-GET method gets a response whose body and exact status are not a contract. Both runtimes must answer with a status of 400 or above, pass the P21 guard and response policy first (§2.1), and write nothing. A test proves no store change | R5 |
+| G17 | On requests that are not valid HTTP/1.1 (raw non-ASCII bytes in the target, whitespace before a colon, obs-fold, HTTP/0.9 or non-HTTP bytes, oversized header lines), TS refuses with a status of 400 or above where the oracle answers 0.9-style, with 403/431, or with 200 on mojibake. Law F-1 (§3.4) forbids the opposite direction | R4: one HTTP framing law for the product view, or a decision to keep F-1 |
 
 ## 5. K: the plugin contract now, the builder at R4 (Q2)
 
@@ -252,7 +290,8 @@ An accepted invariant cannot be reclassified as a deferred gap just to keep the 
 
 Amendments applied in this revision:
 - P22 and P23 (§5.1), added after Codex's STOP on PR 2. Lam approved them at c39dded.
-- P24 (§5.2), added after Codex's second STOP; awaiting Lam.
+- P24 (§5.2), added after Codex's second STOP. Lam approved it at 0969423.
+- §3.4 Law F-1 and G17, from Aux's differential fuzz of PR #38. Revised after Codex's header-count STOP and Lam F39-1/F39-2 @ 292f27a, and after Codex's obs-fold STOP; awaiting Lam.
 - F1: Origin must match the request's own Host.
 - F2: fail-closed header handling and negative tests.
 - F3: the security headers apply to every method and every status.
