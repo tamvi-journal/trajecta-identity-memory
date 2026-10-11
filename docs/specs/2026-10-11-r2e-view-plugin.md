@@ -140,8 +140,9 @@ Aux ran a differential fuzz: the Python worker and the TS worker on copies of th
   - 99 fields: 200.
   - 100 fields: 431.
   - 101 fields: 431.
-  - 98 fields plus one folded continuation line: 200.
-  - 99 fields plus one folded continuation line: 431.
+  - 98 fields plus one folded continuation line: Python 200, TS a status of 400 or above.
+  - 99 fields plus one folded continuation line: Python 431, TS a status of 400 or above.
+  - The fold rows check the oracle's line count, which counts continuation lines. They do **not** require TS to accept obs-fold. Any obs-fold, on any header and under any budget, is malformed (RFC 9112 §5.2) and stays a G17 refusal under F-1. TS must not enable `insecureHTTPParser` or otherwise widen what framing it accepts (Codex STOP @ 08e9ccf).
   - 100 fields with an evil Host: 431.
   - Every count includes Host. No implicit headers are added.
   - Every boundary case is sent both whole and in 3-byte fragments. Each one asserts all six policy headers, and that store bytes, mtime and inventory stay unchanged.
@@ -290,7 +291,7 @@ An accepted invariant cannot be reclassified as a deferred gap just to keep the 
 Amendments applied in this revision:
 - P22 and P23 (§5.1), added after Codex's STOP on PR 2. Lam approved them at c39dded.
 - P24 (§5.2), added after Codex's second STOP. Lam approved it at 0969423.
-- §3.4 Law F-1 and G17, from Aux's differential fuzz of PR #38. Revised after Codex's header-count STOP and Lam F39-1/F39-2 @ 292f27a; awaiting Lam.
+- §3.4 Law F-1 and G17, from Aux's differential fuzz of PR #38. Revised after Codex's header-count STOP and Lam F39-1/F39-2 @ 292f27a, and after Codex's obs-fold STOP; awaiting Lam.
 - F1: Origin must match the request's own Host.
 - F2: fail-closed header handling and negative tests.
 - F3: the security headers apply to every method and every status.
