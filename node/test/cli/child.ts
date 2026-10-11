@@ -1,5 +1,8 @@
 /** Test-only TTY/clock seam; the production entry has no environment bypass. */
-import { readFileSync } from "node:fs";
+import fs, { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+import { resolve } from "node:path";
 import { main } from "../../src/cli.ts";
 const { confirmationLine, utf8Replace } = await import("../../src/cli-runtime.ts");
 const { IdentityMemory } = await import("../../src/identity.ts");
@@ -10,6 +13,20 @@ import type { OrderedObject } from "../../src/encoding.ts";
 const invocation = parseLossless(readFileSync(process.argv[2], "utf8")) as OrderedObject;
 const tty = get(invocation, "tty") === true,
   hook = get(invocation, "hook");
+if (hook === "p26-concurrent-parent") {
+  const original = fs.mkdirSync,
+    parent = resolve("external");
+  let fired = false;
+  fs.mkdirSync = ((path: any, ...args: any[]) => {
+    if (path === parent && !fired) {
+      fired = true;
+      const child = spawnSync(process.execPath, ["-e", "require('node:fs').mkdirSync(process.argv[1])", parent]);
+      if (child.status !== 0) throw new Error(child.stderr.toString());
+    }
+    return (original as any)(path, ...args);
+  }) as any;
+  syncBuiltinESMExports();
+}
 if (hook === "inline-failure") {
   const fail = () => {
     throw new StaleAuthority("target moved after issuance");

@@ -1,0 +1,293 @@
+{
+  "base": "0b1a45c",
+  "corpora": [
+    {
+      "added_cases": [],
+      "corpus": "golden",
+      "manifest_changes": [
+        {
+          "field": [
+            "oracle_sources",
+            "memory_core/store.py"
+          ],
+          "new_sha256": "2de4aa5f64c7240848083882ca193a0913d22669e28c8259f615f776ba6974ae",
+          "old_sha256": "91bbbdbf886173c7a070040b11c5348c3d37cf3663ace38066fb06bf53db3e4f"
+        },
+        {
+          "field": [
+            "oracle_source_sha256"
+          ],
+          "new_sha256": "dda72cc08d6b2c2f424b84e777768b0cbc56af977428a3fa03ff76cdf86aed22",
+          "old_sha256": "65a73f4dec57e1daba60e613f0d4b4c3b78795bb33f79addcc996b3ee917e8e0"
+        }
+      ],
+      "removed_cases": [],
+      "unchanged_payload_files": 48
+    },
+    {
+      "added_cases": [],
+      "corpus": "golden-authority-v2",
+      "manifest_changes": [
+        {
+          "field": [
+            "oracle_sources",
+            "trajecta_identity/migrate_aml.py"
+          ],
+          "rekey": "tools/archive/migrate_aml.py",
+          "sha256": "8542245780c310d0a26b0e775f4361990368c3902c87fe8f91d14e8ad3d37562"
+        },
+        {
+          "field": [
+            "oracle_sources",
+            "memory_core/store.py"
+          ],
+          "new_sha256": "2de4aa5f64c7240848083882ca193a0913d22669e28c8259f615f776ba6974ae",
+          "old_sha256": "91bbbdbf886173c7a070040b11c5348c3d37cf3663ace38066fb06bf53db3e4f"
+        },
+        {
+          "field": [
+            "oracle_sources",
+            "tools/golden_authority/generate.py"
+          ],
+          "new_sha256": "e31469656a1b037b0717656f25edb78dd164f60894cb65bff16daf429c205b4f",
+          "old_sha256": "94b4a8a8a180c171858dabe7a07a6057a0aab2473248b5d3f0ca788cd3231769"
+        },
+        {
+          "field": [
+            "oracle_sources",
+            "trajecta_identity/cli.py"
+          ],
+          "new_sha256": "7e470e728a3ec6869335b66be243cf01fa0f17ab648a8f451f34583222346acc",
+          "old_sha256": "15e3365cff48dc1e4b1efd679aa7594072daee3055ad1678efc9e1671a6a3ef5"
+        },
+        {
+          "field": [
+            "oracle_sources",
+            "trajecta_identity/recipe.py"
+          ],
+          "new_sha256": "c55718c0598350a7c41aa2aa18a8c57eb3d57e2b2c743fde2324a80549baf88e",
+          "old_sha256": "87456368ef552317832794019737dbb737613cda20aff471aadb5142907608cc"
+        }
+      ],
+      "removed_cases": [],
+      "unchanged_payload_files": 140
+    },
+    {
+      "added_cases": [],
+      "corpus": "golden-writes-v5",
+      "manifest_changes": [
+        {
+          "field": [
+            "oracle_sources",
+            "trajecta_identity/migrate_aml.py"
+          ],
+          "rekey": "tools/archive/migrate_aml.py",
+          "sha256": "8542245780c310d0a26b0e775f4361990368c3902c87fe8f91d14e8ad3d37562"
+        },
+        {
+          "field": [
+            "oracle_sources",
+            "memory_core/store.py"
+          ],
+          "new_sha256": "2de4aa5f64c7240848083882ca193a0913d22669e28c8259f615f776ba6974ae",
+          "old_sha256": "91bbbdbf886173c7a070040b11c5348c3d37cf3663ace38066fb06bf53db3e4f"
+        },
+        {
+          "field": [
+            "oracle_sources",
+            "tools/golden_writes/generate.py"
+          ],
+          "new_sha256": "df5dc827a46ef002ae2a5277a0d7bd5c80647aeec9ad53eaaab2f46005ef6bc6",
+          "old_sha256": "45a237daa255661ae3c3b2efccc23f43efac8cacae96ee5f5c35bfdfd89c544e"
+        },
+        {
+          "field": [
+            "oracle_sources",
+            "trajecta_identity/cli.py"
+          ],
+          "new_sha256": "7e470e728a3ec6869335b66be243cf01fa0f17ab648a8f451f34583222346acc",
+          "old_sha256": "15e3365cff48dc1e4b1efd679aa7594072daee3055ad1678efc9e1671a6a3ef5"
+        },
+        {
+          "field": [
+            "oracle_sources",
+            "trajecta_identity/recipe.py"
+          ],
+          "new_sha256": "c55718c0598350a7c41aa2aa18a8c57eb3d57e2b2c743fde2324a80549baf88e",
+          "old_sha256": "87456368ef552317832794019737dbb737613cda20aff471aadb5142907608cc"
+        }
+      ],
+      "removed_cases": [],
+      "unchanged_payload_files": 80
+    },
+    {
+      "added_cases": [],
+      "corpus": "golden-mcp-v1",
+      "manifest_changes": [
+        {
+          "field": [
+            "oracle_sources",
+            "trajecta_identity/migrate_aml.py"
+          ],
+          "rekey": "tools/archive/migrate_aml.py",
+          "sha256": "8542245780c310d0a26b0e775f4361990368c3902c87fe8f91d14e8ad3d37562"
+        },
+        {
+          "field": [
+            "oracle_sources",
+            "memory_core/store.py"
+          ],
+          "new_sha256": "2de4aa5f64c7240848083882ca193a0913d22669e28c8259f615f776ba6974ae",
+          "old_sha256": "91bbbdbf886173c7a070040b11c5348c3d37cf3663ace38066fb06bf53db3e4f"
+        },
+        {
+          "field": [
+            "oracle_sources",
+            "tools/golden_mcp/generate.py"
+          ],
+          "new_sha256": "f4fa617ae23feccd0a3295ef593b0cebc169ded347e9c9793bc69a617555d1e6",
+          "old_sha256": "93ba861db2ee26bf9bb8f68b520e7db6af386865c2c7fc2a44c2b498c0d7193f"
+        },
+        {
+          "field": [
+            "oracle_sources",
+            "trajecta_identity/cli.py"
+          ],
+          "new_sha256": "7e470e728a3ec6869335b66be243cf01fa0f17ab648a8f451f34583222346acc",
+          "old_sha256": "15e3365cff48dc1e4b1efd679aa7594072daee3055ad1678efc9e1671a6a3ef5"
+        },
+        {
+          "field": [
+            "oracle_sources",
+            "trajecta_identity/recipe.py"
+          ],
+          "new_sha256": "c55718c0598350a7c41aa2aa18a8c57eb3d57e2b2c743fde2324a80549baf88e",
+          "old_sha256": "87456368ef552317832794019737dbb737613cda20aff471aadb5142907608cc"
+        }
+      ],
+      "removed_cases": [],
+      "unchanged_payload_files": 121
+    },
+    {
+      "added_cases": [
+        "migration-p26-concurrent-parent",
+        "migration-p26-missing-parent-chain",
+        "resolve-p25-conflict-format",
+        "resolve-p25-conflict-json",
+        "resolve-p25-conflict-nan",
+        "resolve-p25-conflict-url",
+        "resolve-p25-identical-json",
+        "resolve-p25-identical-nan",
+        "resolve-p25-identical-url",
+        "resolve-p25-replace-json",
+        "resolve-p25-replace-url"
+      ],
+      "corpus": "golden-cli-v1",
+      "manifest_changes": [
+        {
+          "field": [
+            "oracle_sources",
+            "trajecta_identity/migrate_aml.py"
+          ],
+          "rekey": "tools/archive/migrate_aml.py",
+          "sha256": "8542245780c310d0a26b0e775f4361990368c3902c87fe8f91d14e8ad3d37562"
+        },
+        {
+          "field": [
+            "oracle_sources",
+            "memory_core/store.py"
+          ],
+          "new_sha256": "2de4aa5f64c7240848083882ca193a0913d22669e28c8259f615f776ba6974ae",
+          "old_sha256": "91bbbdbf886173c7a070040b11c5348c3d37cf3663ace38066fb06bf53db3e4f"
+        },
+        {
+          "field": [
+            "oracle_sources",
+            "tools/golden_cli/generate.py"
+          ],
+          "new_sha256": "cf5e810ab4bc721cc6d52fce247b81de6abb610ec1f1dc7740f7869032e6b1f2",
+          "old_sha256": "3e5aa028009449bb9f8386b5e57e22665b3e88c0e89e4f07ddbfccfacbc743c6"
+        },
+        {
+          "field": [
+            "oracle_sources",
+            "tools/golden_mcp/generate.py"
+          ],
+          "new_sha256": "f4fa617ae23feccd0a3295ef593b0cebc169ded347e9c9793bc69a617555d1e6",
+          "old_sha256": "93ba861db2ee26bf9bb8f68b520e7db6af386865c2c7fc2a44c2b498c0d7193f"
+        },
+        {
+          "field": [
+            "oracle_sources",
+            "trajecta_identity/cli.py"
+          ],
+          "new_sha256": "7e470e728a3ec6869335b66be243cf01fa0f17ab648a8f451f34583222346acc",
+          "old_sha256": "15e3365cff48dc1e4b1efd679aa7594072daee3055ad1678efc9e1671a6a3ef5"
+        },
+        {
+          "field": [
+            "oracle_sources",
+            "trajecta_identity/recipe.py"
+          ],
+          "new_sha256": "c55718c0598350a7c41aa2aa18a8c57eb3d57e2b2c743fde2324a80549baf88e",
+          "old_sha256": "87456368ef552317832794019737dbb737613cda20aff471aadb5142907608cc"
+        }
+      ],
+      "removed_cases": [
+        "migration-dry-parent",
+        "resolve-overwrite-json",
+        "resolve-overwrite-url"
+      ],
+      "unchanged_payload_files": 2600
+    },
+    {
+      "added_cases": [],
+      "corpus": "golden-view-v1",
+      "manifest_changes": [
+        {
+          "field": [
+            "oracle_sources",
+            "trajecta_identity/migrate_aml.py"
+          ],
+          "rekey": "tools/archive/migrate_aml.py",
+          "sha256": "8542245780c310d0a26b0e775f4361990368c3902c87fe8f91d14e8ad3d37562"
+        },
+        {
+          "field": [
+            "oracle_sources",
+            "memory_core/store.py"
+          ],
+          "new_sha256": "2de4aa5f64c7240848083882ca193a0913d22669e28c8259f615f776ba6974ae",
+          "old_sha256": "91bbbdbf886173c7a070040b11c5348c3d37cf3663ace38066fb06bf53db3e4f"
+        },
+        {
+          "field": [
+            "oracle_sources",
+            "tools/golden_view/generate.py"
+          ],
+          "new_sha256": "0df02870498e246331513a7e34393ab0f72da5394ecdd566c90dab233438dbaa",
+          "old_sha256": "d1c919609c47a3ad42d146d9c09ba48a437f9a6511c582ddee1903a6dc320832"
+        },
+        {
+          "field": [
+            "oracle_sources",
+            "trajecta_identity/cli.py"
+          ],
+          "new_sha256": "7e470e728a3ec6869335b66be243cf01fa0f17ab648a8f451f34583222346acc",
+          "old_sha256": "15e3365cff48dc1e4b1efd679aa7594072daee3055ad1678efc9e1671a6a3ef5"
+        },
+        {
+          "field": [
+            "oracle_sources",
+            "trajecta_identity/recipe.py"
+          ],
+          "new_sha256": "c55718c0598350a7c41aa2aa18a8c57eb3d57e2b2c743fde2324a80549baf88e",
+          "old_sha256": "87456368ef552317832794019737dbb737613cda20aff471aadb5142907608cc"
+        }
+      ],
+      "removed_cases": [],
+      "unchanged_payload_files": 760
+    }
+  ],
+  "law": "R4 P25/P26 named replacements; Aux S2 source re-key"
+}

@@ -199,7 +199,10 @@ def scenario_matrix():
         scenarios.append({"name": f"integer-{index:02}", "argv": ["--db", "store.sqlite3", "timeline", "--limit", token]})
     for index, argv in enumerate([["--help"], ["retrieve", "--help"], [], ["bad-command"], ["retrieve"], ["approve-core", "x", "--apply", "--reject"]]):
         scenarios.append({"name": f"usage-{index:02}", "argv": argv})
-    for mode in ("name", "folder", "json", "url", "env", "last", "default", "failure", "profiles", "overwrite-json", "overwrite-url", "safe-name", "surrogate", "invalid-json", "invalid-utf8", "url-large", "url-invalid-core", "url-invalid-json", "url-invalid-utf8"):
+    for mode in ("name", "folder", "json", "url", "env", "last", "default", "failure", "profiles", "safe-name", "surrogate", "invalid-json", "invalid-utf8", "url-large", "url-invalid-core", "url-invalid-json", "url-invalid-utf8",
+                 "p25-conflict-json", "p25-replace-json", "p25-identical-json",
+                 "p25-conflict-url", "p25-replace-url", "p25-identical-url",
+                 "p25-identical-nan", "p25-conflict-nan", "p25-conflict-format"):
         scenarios.append({"name": f"resolve-{mode}", "resolve": mode, "argv": ["--db", "store.sqlite3", "status"]})
     for kind in ("nan", "infinity", "negative-infinity", "high-surrogate", "low-surrogate", "paired-surrogate"):
         for command in ("status", "profiles"):
@@ -207,14 +210,17 @@ def scenario_matrix():
                               "argv": ["--db", "store.sqlite3", command]})
         scenarios.append({"name": f"decode-install-{kind}", "decode_profile": kind, "install": True,
                           "argv": ["--db", "store.sqlite3", "status"]})
-    for mode in ("missing-dry", "missing-backup-equal", "v2", "v3", "v4", "existing-target", "existing-backup", "equal-backup", "dry-parent"):
+    for mode in ("missing-dry", "missing-backup-equal", "v2", "v3", "v4", "existing-target", "existing-backup", "equal-backup", "p26-missing-parent-chain", "p26-concurrent-parent"):
         state = "missing" if mode.startswith("missing") else mode if mode in {"v2", "v3"} else "legacy-v4"
         argv = ["--db", "store.sqlite3", "migrate-to", "target.sqlite3"]
         if mode == "missing-dry": argv += ["--dry-run"]
         if mode.endswith("equal") or mode == "equal-backup": argv += ["--backup", "target.sqlite3"]
         if mode == "existing-backup": argv += ["--backup", "backup.sqlite3"]
-        if mode == "dry-parent": argv = ["--db", "store.sqlite3", "migrate-to", "nested/parent/target.sqlite3", "--dry-run"]
-        scenarios.append({"name": "migration-"+mode, "state": state, "migration": mode, "argv": argv})
+        if mode.startswith("p26-"):
+            target = "external/owned/deep/target.sqlite3" if mode == "p26-concurrent-parent" else "nested/parent/target.sqlite3"
+            argv = ["--db", "store.sqlite3", "migrate-to", target, "--dry-run"]
+        scenarios.append({"name": "migration-"+mode, "state": state, "migration": mode, "argv": argv,
+                          **({"hook": "p26-concurrent-parent"} if mode == "p26-concurrent-parent" else {})})
     for mode in ("core-apply", "core-reject", "retract", "legacy-close"):
         for outcome in ("inline", "issue-only", "inline-failure", "no-tty", "mismatch", "invalid-utf8"):
             scenarios.append({"name": f"authority-{mode}-{outcome}", "authority": mode, "outcome": outcome})
@@ -277,6 +283,19 @@ def prepare(work, scenario):
             dest = work / "data/profiles/remote"; dest.mkdir(parents=True)
             old = dict(data); old["core"] = dict(data["core"], summary="old installed contents")
             (dest / "profile.json").write_text(json.dumps(old), encoding="utf8")
+        if mode.startswith("p25-"):
+            if mode.endswith("nan"):
+                data["v"] = float("nan")
+            (work / "recipe.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf8")
+            argv = ["-p", "{{ORIGIN}}/profile.json" if mode.endswith("url") else "recipe.json",
+                    *(["--replace-profile"] if mode.startswith("p25-replace") else []), *argv]
+            dest = work / "data/profiles/remote"; dest.mkdir(parents=True)
+            old = dict(data)
+            if not mode.startswith("p25-identical") and mode != "p25-conflict-format":
+                old["core"] = dict(data["core"], summary="old installed contents")
+            raw = json.dumps(old, ensure_ascii=False, indent=2) + "\n"
+            if mode == "p25-conflict-format": raw += " "
+            (dest / "profile.json").write_bytes(raw.encode("utf8"))
     kind = scenario.get("decode_profile")
     if kind:
         data = json.loads((BUNDLED / "example/profile.json").read_text())
@@ -367,6 +386,8 @@ def generate(output):
             work = workspace / name; work.mkdir(); work = work.resolve()
             clock = workspace / (name + "-clock"); clock.mkdir()
             mcp.write_sitecustomize(clock / "sitecustomize.py")
+            with (clock / "sitecustomize.py").open("a") as out:
+                out.write("\nimport trajecta_identity.recipe as recipe\nrecipe.datetime = Micros\n")
             with clock_context(): argv, extra, stdin, tty, hook = prepare(work, config)
             file_times = {}
             if "migrate-to" in argv and "--db" in argv:
@@ -381,6 +402,7 @@ def generate(output):
                     if tty: out.write("\nimport sys\nsys.stdin.isatty = lambda: True\nsys.stdout.isatty = lambda: True\n")
                     if hook == "inline-failure": out.write("\nfrom trajecta_identity.identity import IdentityMemory\nfrom trajecta_identity.authority import StaleAuthority\ndef fail(self, receipt): raise StaleAuthority('target moved after issuance')\nIdentityMemory.identity_core_apply = fail\nIdentityMemory.identity_retract = fail\nIdentityMemory.identity_close_legacy_discussion = fail\n")
                     if hook == "untyped-crash": out.write("\nfrom trajecta_identity.identity import IdentityMemory\ndef fail(self): raise RuntimeError('test internal crash')\nIdentityMemory.status = fail\n")
+                    if hook == "p26-concurrent-parent": out.write("\nfrom pathlib import Path\nimport subprocess, sys\n_original_mkdir = Path.mkdir\n_parent = Path('external').resolve()\n_fired = False\ndef concurrent_parent(self, *args, **kwargs):\n    global _fired\n    if self.resolve() == _parent and not _fired:\n        _fired = True\n        subprocess.run([sys.executable, '-S', '-c', 'from pathlib import Path; import sys; Path(sys.argv[1]).mkdir()', str(self)], check=True)\n    return _original_mkdir(self, *args, **kwargs)\nPath.mkdir = concurrent_parent\n")
             env = isolated_env(work, clock); env.update(extra)
             # Stable input templates contain only fixture-relative paths/tokens.
             input_env = {key: value.replace(str(work), "{{ROOT}}") for key, value in env.items() if key not in {"PATH", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE", "SYSTEMROOT", "COMSPEC", "PYTHONHASHSEED"}}
