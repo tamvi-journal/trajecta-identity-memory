@@ -78,3 +78,12 @@ Local focused results: **12/12 TS**, **12/12 Python**. Full Node: **577 passed /
 The initial parallel Python run collided with Node's temporary-directory cleanup
 in the existing repository path scan; no test was changed or skipped to resolve
 that harness scheduling error. The PR records the updated exact-head CI receipt.
+
+The first follow-up CI run exposed a Windows transport-test error: the fragmented
+sender kept writing after Python had already refused at line 101 and closed,
+aborting the client's socket before it read the response. Fragmented Python
+senders now check readability between chunks and consume the first response
+immediately; they never retry the request. HTTPResponse is closed explicitly on
+every path. All status, body, header and purity assertions are unchanged.
+The affected contract suite passes **39/39** locally and X still passes **224 + 2**;
+the final CI run is the Windows acceptance evidence for this test-only correction.

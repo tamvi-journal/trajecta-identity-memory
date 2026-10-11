@@ -1,8 +1,8 @@
 """P21 request-boundary regressions use real loopback sockets and owned stores."""
 import http.client
+import select
 import socket
 import threading
-import time
 from contextlib import contextmanager
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -80,25 +80,29 @@ def test_python_physical_header_line_budget(memory, fields, folds, evil_host, ex
         with socket.create_connection(("127.0.0.1", server.server_port), timeout=5) as connection:
             if fragment_size:
                 for offset in range(0, len(raw), fragment_size):
+                    # Read an early parser refusal before sending beyond its close.
+                    # In particular, Python rejects at physical line 101, before
+                    # the terminating blank line. There is no request retry.
+                    if select.select([connection], [], [], .001)[0]:
+                        break
                     try:
                         connection.sendall(raw[offset:offset + fragment_size])
                     except BrokenPipeError:
                         # The oracle may reject at line 101 before the final blank line.
                         break
-                    time.sleep(.001)
             else:
                 connection.sendall(raw)
-            response = http.client.HTTPResponse(connection)
-            response.begin()
-            headers, body = dict(response.getheaders()), response.read()
-            assert response.status == expected
-            policy(headers)
-            assert headers["Content-Length"] == str(len(body))
-            if expected == 431:
-                assert body == b"Too many headers"
-                assert headers["Content-Type"] == "text/plain"
-            else:
-                assert body == view.PAGE
+            with http.client.HTTPResponse(connection) as response:
+                response.begin()
+                headers, body = dict(response.getheaders()), response.read()
+                assert response.status == expected
+                policy(headers)
+                assert headers["Content-Length"] == str(len(body))
+                if expected == 431:
+                    assert body == b"Too many headers"
+                    assert headers["Content-Type"] == "text/plain"
+                else:
+                    assert body == view.PAGE
     assert unchanged(memory) == before
 
 

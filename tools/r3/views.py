@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import json
 import http.client
+import select
 from pathlib import Path
 import shutil
 import socket
 import subprocess
 import sys
 import tempfile
-import time
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -51,20 +51,22 @@ def header_request(port, case):
     with socket.create_connection(("127.0.0.1", port), timeout=10) as connection:
         size = case["fragment_size"] or len(raw)
         for offset in range(0, len(raw), size):
+            if case["fragment_size"] and select.select([connection], [], [], .001)[0]:
+                # Stop transmitting when the oracle refuses before end-of-headers;
+                # consume that exact response, without a retry or tolerance.
+                break
             try:
                 connection.sendall(raw[offset:offset + size])
             except BrokenPipeError:
                 break
-            if case["fragment_size"]:
-                time.sleep(.001)
-        response = http.client.HTTPResponse(connection)
-        response.begin()
-        body = response.read()
-        assert response.status == case["expected_status"]
-        if response.status == 431:
-            assert body == b"Too many headers"
-        return {"status": response.status, "headers": {
-            key: response.getheader(key) for key in HEADERS}}, body
+        with http.client.HTTPResponse(connection) as response:
+            response.begin()
+            body = response.read()
+            assert response.status == case["expected_status"]
+            if response.status == 431:
+                assert body == b"Too many headers"
+            return {"status": response.status, "headers": {
+                key: response.getheader(key) for key in HEADERS}}, body
 
 
 def responses(runtime, root):
