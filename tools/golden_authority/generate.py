@@ -27,6 +27,7 @@ ORACLE_COMMIT = "9b22b4acae7e016cf28548dbdeae72420d493d98"
 TABLES = ROOT / "memory_core" / "tables"
 LEGACY_V4 = ROOT / "spec" / "golden" / "identity-open" / "store.sqlite3"
 SOURCES = (
+    "tools/archive/migrate_aml.py",
     "memory_core/*.py", "memory_core/schema.sql", "trajecta_identity/*.py",
     "trajecta_identity/profiles/example/profile.json", "tools/golden_authority/generate.py",
 )

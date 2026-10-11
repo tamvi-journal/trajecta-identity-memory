@@ -46,6 +46,7 @@ TABLES = ROOT / "memory_core" / "tables"
 LEGACY_V4 = ROOT / "spec" / "golden" / "identity-open" / "store.sqlite3"
 BUNDLED_PROFILES = ROOT / "trajecta_identity" / "profiles"
 SOURCES = (
+    "tools/archive/migrate_aml.py",
     "memory_core/*.py",
     "memory_core/schema.sql",
     "trajecta_identity/*.py",

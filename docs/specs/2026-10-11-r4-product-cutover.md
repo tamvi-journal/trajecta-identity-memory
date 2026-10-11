@@ -244,10 +244,11 @@ It is **not** `npm pack`. npm publish is not used in R4.
   - The README's install section moves to the product.
   - **The oracle stays in CI as a reader for one release.** All corpora keep running against Python until the release after 0.5.0.
 - **G13 → P25, refuse silent profile overwrite.** This is an explicit **oracle patch in both runtimes**: Python is patched first, then TS. The corpus diff is audited: the old G13 case is removed **by name** and its replacement cases are added. No other corpus byte may change except MANIFEST digest fields, and those are checked mechanically as in #37.
-  - If a `.json` or URL profile would overwrite an installed profile of the same name, and the canonical JSON bytes differ, the command refuses with a typed error (`ProfileConflict: profile '<name>' differs from the installed copy; pass --replace-profile to overwrite`) and exits 1, with no write.
+  - If a `.json` or URL profile would overwrite an installed profile of the same name, and the R2d install-writer bytes differ, the command refuses with a typed error (`ProfileConflict: profile '<name>' differs from the installed copy; pass --replace-profile to overwrite`) and exits 1, with no write.
   - `--replace-profile` keeps today's overwrite, after writing a backup `profile.json.<UTC timestamp>.bak`.
   - Identical bytes are a no-op.
-  - **Comparison:** both sides are canonicalized as R0 canonical JSON (sorted keys, the Python-compatible separators, `ensure_ascii=False`, UTF-8), then compared byte for byte. A profile that is not valid JSON is refused, as it is today, before any comparison.
+  - **Comparison:** compare the incoming R2d install-writer bytes (`json.dumps(data, ensure_ascii=False, indent=2) + "\n"`, UTF-8; TS `jsonWith(profile=true)`) directly with the installed `profile.json` bytes. The installed file is never parsed for this comparison. Equal bytes are a no-op; any byte difference, including whitespace or key order, is a conflict. Incoming invalid JSON is refused first, as today. Accepted CPython constants (`NaN`, `Infinity`, `-Infinity`) keep their existing writer spelling. R0 canonical JSON is unchanged.
+  - **Provenance:** Codex S1, Aux settlement: P25 compares R2d install-writer bytes, not R0 canonical JSON.
   - **Backup name:** `profile.json.<UTC YYYYMMDDTHHMMSSffffffZ>.bak`. If that name already exists, append `.1`, `.2` and so on; an existing file is never overwritten.
   - **Failure:** the backup is written first. The new profile is written to a temporary file in the same folder and committed with `os.replace` (P22 pattern). On any failure the installed `profile.json` keeps its exact bytes, and a backup that was already written is left in place and reported.
   - The corpus case that pins today's overwrite is replaced by three cases: conflict, replace and identical.
@@ -260,6 +261,7 @@ It is **not** `npm pack`. npm publish is not used in R4.
   - Frozen corpus payloads keep their provenance. The pinned G14 case is replaced by name, and the R2d spec text is not edited.
 - **G17: keep Law F-1 as the permanent product HTTP law (Q5).** On malformed or over-limit input, TS may be stricter than the oracle, never more permissive. G17 closes as accepted. The wording nit, "oversized header line" meaning over the limit, is fixed in the same PR.
 - **`import-aml`: archive (Q6).** It moves to `tools/archive/` with a README, it is not shipped, and it is not ported. It was a one-shot import for Ty's own AML vault, not product write law.
+  - **Provenance:** Codex S2, Aux settlement: authority-v2, writes-v5, mcp-v1, cli-v1 and view-v1 MANIFESTs may re-key `oracle_sources[trajecta_identity/migrate_aml.py]` to `tools/archive/migrate_aml.py`. The archived source stays byte-identical, old and new digests must match, and only this key rename plus permitted digest-field changes are allowed. Generators list the archive path explicitly, never glob `tools/archive/*`.
 
 ## 8. Gates (all on exact heads; zero tolerance)
 

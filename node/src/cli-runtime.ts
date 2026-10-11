@@ -132,7 +132,7 @@ export function parseArgs(argv: string[]): Record<string, any> {
   const extras: string[] = [];
   const commandUsage = (message: string): never =>
     usage(message, result.command ? `trajecta-identity ${result.command}` : "trajecta-identity");
-  let grammar: Grammar = { values: ["profile", "db"] },
+  let grammar: Grammar = { values: ["profile", "db"], flags: ["replace-profile"] },
     positional = 0,
     ended = false;
   for (let i = 0; i < argv.length; i++) {
@@ -285,7 +285,12 @@ export async function main(argv = process.argv.slice(2), options: CliOptions = {
       stdout(cliJson({ profiles: listProfiles(env) }));
       return 0;
     }
-    const profile = await resolveProfile(args.profile, { env, rememberChoice: command !== "doctor" });
+    const profile = await resolveProfile(args.profile, {
+      env,
+      rememberChoice: command !== "doctor",
+      replaceProfile: Boolean(args.replace_profile),
+      clock: options.clock,
+    });
     const database = args.db !== undefined ? normalize(args.db) : profileDb(profile.name, env);
     memory = new IdentityMemory(profile, database, {
       surface: "cli",

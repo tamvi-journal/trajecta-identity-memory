@@ -52,6 +52,12 @@ export class ValueError extends Error {
     this.name = "ValueError";
   }
 }
+export class ProfileConflict extends ValueError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProfileConflict";
+  }
+}
 
 export class RuntimeError extends Error {
   constructor(message: string) {

@@ -28,6 +28,7 @@ ORACLE_SEMANTICS = ["R0-frozen", "R2a-authority-v2", "P4-decay-v4-refusal", "P5-
 TABLES = ROOT / "memory_core" / "tables"
 LEGACY_V4 = ROOT / "spec" / "golden" / "identity-open" / "store.sqlite3"
 SOURCES = (
+    "tools/archive/migrate_aml.py",
     "memory_core/*.py", "memory_core/schema.sql", "trajecta_identity/*.py",
     "trajecta_identity/profiles/example/profile.json", "tools/golden_writes/generate.py",
 )

@@ -27,7 +27,8 @@ from trajecta_identity.view import make_handler
 ORACLE_BASE_COMMIT = "fc2a2de"
 HEADERS = ("Content-Type", "Content-Length", "Cache-Control", "X-Content-Type-Options",
            "X-Frame-Options", "Referrer-Policy")
-SOURCES = ("memory_core/*.py", "memory_core/schema.sql", "trajecta_identity/*.py",
+SOURCES = (
+    "tools/archive/migrate_aml.py","memory_core/*.py", "memory_core/schema.sql", "trajecta_identity/*.py",
            "trajecta_identity/assets/view.html", "trajecta_identity/profiles/example/profile.json",
            "tools/golden/generate.py", "tools/golden_view/*.py")
 
