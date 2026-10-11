@@ -1,6 +1,6 @@
 # R4: the Trajecta product layer, installer, and cutover
 
-Status: revised after Lam's review @ b121be5 (REQUEST CHANGES: F40-1..F40-4; Q1–Q8 yes with conditions; §11). Author: Aux (leader). Builds on R0–R3 and R2e (main @ efa5149).
+Status: approved by Lam @ 8dae7e3; §12 added after Ty's product question (Lam settlement 2026-10-11), revised after Lam #41 @ f10c11a (F41-1..F41-3) and @ 6cf5d29 (F41-4, F41-5). Revised after Lam's review @ b121be5 (REQUEST CHANGES: F40-1..F40-4; Q1–Q8 yes with conditions; §11). Author: Aux (leader). Builds on R0–R3 and R2e (main @ efa5149).
 
 ## 0. Goal, and what "done" means
 
@@ -158,7 +158,7 @@ It is **not** `npm pack`. npm publish is not used in R4.
    - **Stale recovery is serialized** by a second mutex, `<root>/.lock.recover`, also taken by exclusive create with its own token.
      - The recoverer re-reads `.lock` **while holding `.recover`**. It unlinks `.lock` only if the file still holds the **same dead token** it first read. Then it releases `.recover` and retries acquiring `.lock` from the start.
      - Why this is safe: while a dead `.lock` exists, no acquirer can create a new `.lock`, and only one recoverer can act at a time. So the token re-read under `.recover` cannot belong to a newly acquired lock, and a contender can never delete another's fresh lock.
-   - **A stale `.recover`** (its holder died mid-recovery) is never auto-broken. The run prints `trajecta install --break-lock` instructions. That command shows both tokens and requires a typed confirmation on a TTY.
+   - **A stale `.recover`** (its holder died mid-recovery) is never auto-broken. The run prints `trajecta install --break-lock` instructions. That command shows both tokens and requires a typed confirmation on a TTY. After the confirmation, and immediately before unlinking, it re-reads the `.recover` token and compares it with the one shown; on any mismatch it aborts and unlinks nothing.
    - **Test (M3):** 200 rounds of 4 concurrent contenders against a dead lock, plus contenders racing a live acquirer. Exactly one holder at any time; no fresh lock is ever deleted; no deadlock.
 6. **Rename** `<staging>/trajecta-<ver>` to `<root>/<ver>`, on the same volume. If `<root>/<ver>` already exists and its `MANIFEST.json` digest matches, reuse it. If it exists with a different digest → exit 1.
 7. **Plan.** Write `<root>/<ver>/.planned.json`, listing every path the install *will* create, with its **expected** SHA-256. A plan grants **no** ownership.
@@ -210,6 +210,12 @@ It is **not** `npm pack`. npm publish is not used in R4.
 - A changed or unlisted file is kept and reported.
 - A directory is removed only if this install created it **and** it is empty.
 - Stores, profiles and client configs are never touched. The command prints where the data remains.
+- **One owner-authorized exception: `<root>/update-state.json` (Lam #41 F41-5; §12.2).** It is not in `owned.json`, so the rules above never remove it. Only a **full** uninstall may, and only when all of these hold:
+  - no version remains installed after this run's other removals have succeeded; if any removal failed or was refused, the state file is kept;
+  - the path is exactly `<root>/update-state.json`, a regular file (not a symlink), inside the `<root>` this installer owns;
+  - the owner types the confirmation on a TTY, after a warning that replay protection and the key-rotation chain reset. No TTY, `--yes`, or a mismatched answer keeps it;
+  - it is removed by a single unlink under the install lock. If the unlink fails, the file is intact and the failure is reported.
+  - `uninstall --version`, `--rollback` and `update` never remove or rewrite it, except `update` advancing it as §12.2 defines.
 
 ### 5.5 Upgrade from a Python install
 
@@ -261,7 +267,7 @@ It is **not** `npm pack`. npm publish is not used in R4.
 |---|---|
 | **M1 engine matrix** | Every identity corpus and R3 X/Z, plus the work engine suite, on {macOS, Windows, Linux} × {Node 22, Node 24} |
 | **M2 product contract** | **Pass-through:** over the full cli-v1 corpus and the work CLI suite, argv, stdin, cwd and env are preserved, and stdout, stderr and exit code are byte-exact (§2.3). **Authority:** the adapter lint and source scan are clean, the differential authority test passes, and the write-trace test passes (§2.4). **Build:** two builds produce byte-identical tarballs, `MANIFEST.json` verifies, and `compat.json` is regenerated with an empty diff. **Offline:** in a network-disabled sandbox, the tarball is unpacked, `trajecta version` reports both engine SHAs, and an identity `retrieve` and a `work` round trip run with no Git or npm access |
-| **M3 clean-machine install** | On each OS, with Node 22 and with Node 24: install → doctor → `identity retrieve` → `work` round trip → uninstall. Store bytes are unchanged by uninstall, and `.owned.json` ownership is respected (a modified launcher is kept). **The no-Node case runs in a proven isolated environment:** a Linux container image that has no `node` (asserted with `command -v node` failing first); on macOS and Windows, PATH and the known-location roots point at an empty temp tree, and the test first asserts that the probe list resolves nothing. **Faults are injected** at every Phase A/B/C step boundary (signature, SHA, a tar path-traversal entry, a file digest, doctor, the rename, the pointer write, the plugin write). Each must land in the state §5.2 promises, and re-running install must converge |
+| **M3 clean-machine install** | On each OS, with Node 22 and with Node 24: install → doctor → `identity retrieve` → `work` round trip → uninstall. Store bytes are unchanged by uninstall, and `<root>/owned.json` ownership is respected (a modified launcher is kept). **The no-Node case runs in a proven isolated environment:** a Linux container image that has no `node` (asserted with `command -v node` failing first); on macOS and Windows, PATH and the known-location roots point at an empty temp tree, and the test first asserts that the probe list resolves nothing. **Faults are injected** at every Phase A/B/C step boundary (signature, SHA, a tar path-traversal entry, a file digest, doctor, the rename, the pointer write, the plugin write). Each must land in the state §5.2 promises, and re-running install must converge |
 | **M4 upgrade from Python** | A fixture with the old venv install and an R3-era store: the installer detects it, prints the replacement, changes nothing, and the TS runtime reads and writes the store under the R3 laws |
 | **M5 plugin** | K1–K6 exact. The `.mcp.json` command is the OS-native wrapper. With Node removed, the wrapper prints the `<server>: need …` refusal and exits 1. With Node present, an MCP `initialize` round trip through the wrapper is byte-exact on all 3 OSes, including Windows `cmd.exe /c` |
 | **M6 P25/P26** | Both runtimes, new corpus cases, three seeds |
@@ -289,10 +295,12 @@ Merge rule: unchanged. Lam approves the exact head, CI is green on that head, th
 - **Q7:** Should the installer only print a replacement for an old Python MCP config, never edit it? Aux: yes. Client configs belong to the owner (standing safety rule).
 - **Q8:** Should the product version be 0.5.0? Aux: yes. It sorts after everything a user has seen.
 - **Q9 — CONDITIONAL YES (Lam):** the Ed25519 key lives in a GitHub Actions `release` environment, **for the developer beta only**. The conditions:
-  - **Protected refs:** the environment accepts only signed release tags on `main`. Changes to the signing workflow need a reviewed PR, a CODEOWNERS rule naming Ty, and branch protection.
+  - **Protected trigger (Lam #41 F41-4):** the release workflow runs only by manual `workflow_dispatch`, and the `release` environment's deployment policy admits only the protected `main` branch. The first step refuses unless `github.ref` is `refs/heads/main` and the workflow file is the one on `main`. No PR, fork, tag or other ref can enter the environment. Changes to the release workflow need a reviewed PR, a CODEOWNERS rule naming Ty, and branch protection.
+  - **Dispatch inputs are digests, not trust:** the version, the artifact digest, the source commit on `main`, and the digests of the M8 receipt and both reviewer receipts (§12.1). The candidate tarball and the receipts sit on a **draft** release that has no tag yet. The job re-derives every digest itself from those assets and refuses on any mismatch.
+  - **Tags are created only after signing:** release tags `v*` are protected by a ruleset that lets only the release workflow create them, with no bypass for anyone else and no update or deletion. After the signer job finishes, a separate publish job (holding `contents: write` and no key) verifies the signature against the pinned public key, creates the tag on the recorded source commit, and publishes the draft. No tag exists without M8, both receipts, Ty's approval and a valid signature.
   - **Approval of an exact digest:** the signing job prints the candidate tarball's SHA-256 and the `release.json` bytes. Ty approves **that exact digest** in the environment prompt. The job re-checks the digest after approval and signs only that.
   - **No self-approval:** "prevent self-review" is enabled. No bypass for admins, where GitHub offers the setting.
-  - **Isolated signer:** a separate job with only `contents: read`, no checkout of PR code, and a pinned action SHA. The key is used through stdin to a short pinned script and never written to disk or logs.
+  - **Isolated signer:** a separate job with only `contents: read`, no checkout of PR code, and a pinned action SHA. It never creates tags or releases; the publish job does that. The key is used through stdin to a short pinned script and never written to disk or logs.
   - **Release receipt:** the run ID, approver, digest, signature and key fingerprint are recorded as a release asset and in the release evidence.
   - **Stated honestly:** approval gates access to the secret. It does not prove the workflow code is safe, or that the key never reaches the runner.
   - **Signing and release stay disabled until Ty approves this setup.**
@@ -330,3 +338,76 @@ Merge rule: unchanged. Lam approves the exact head, CI is green on that head, th
   - §5.2: transaction boundaries, with the bootstrapped empty store declared a valid uncompensated state.
   - §5.4: uninstall removes owned, unchanged paths only.
 - **Q1–Q8:** yes, with Lam's conditions recorded inline. Q2 is for the developer beta only. Q3 holds after full 3-OS certification. Q4 holds after F40-1/F40-2. Q6 archives `import-aml` with its history kept. P25/P26 are explicit both-runtime oracle patches with audited corpus diffs (§7).
+- **#41 @ f10c11a (REQUEST CHANGES F41-1..F41-3):** F41-1, M8 receipt bound to the artifact digest, required before both reviewer receipts and Ty's approval, checked by the signing job (12.1). F41-2, shared monotonic `update-state.json` outside version directories, never decreased, fail-closed recovery, rotation chain kept across rollback (12.2). F41-3, exact verify → stage → inspect → switch-only-when-compatible order, and `migrate-to --using` as verified staged execution (12.2). §12 moved after §11.
+- **#41 @ 6cf5d29 (REQUEST CHANGES F41-4, F41-5):** F41-4, release by manual `workflow_dispatch` on protected `main` with digest inputs; the tag is created by a separate keyless publish job only after signing; Q9 and 12.1 item 7 agree. F41-5, an owner-authorized exception in §5.4 for `<root>/update-state.json` on full uninstall only. Nonblocking: `--reset-state` is described as a human trust reset, and M2 pins its boundary.
+
+## 12. Release approval and updates (Ty's product question; Lam settlement 2026-10-11)
+
+Ty's question: *what do real products do, and what makes future feature updates easiest?* This section is an architectural settlement. It does **not** authorize any release or signing setup: that still needs Ty's explicit consent.
+
+### 12.1 Release approval in plain language (amends Q9)
+
+1. **One immutable candidate.** A candidate is fixed by four things: the version, the tarball SHA-256 (the **artifact digest**), the pinned engine SHAs, and the CI run IDs for M1–M7. If any of these changes, the candidate is new.
+2. **M8 is bound to the candidate (Lam #41 F41-1).** Ty's real-copy rehearsal (M8) runs on **this** tarball, installed by digest. It produces an **M8 receipt** that records the artifact digest, the OS and Node used, and the pass/fail of each M8 step. Aux or Lam reads the rehearsal output and writes the receipt; Ty only runs the rehearsal and is never asked to verify anything technical. An M8 receipt for any other digest does not count.
+3. **Two independent reviews, after M8.** Only once the M8 receipt exists do Aux and Lam each verify the **same** candidate on their own: M1–M7 from the CI run IDs and M8 from the M8 receipt, all naming the same artifact digest. Each attaches a **reviewer receipt** to the draft release. A receipt records the reviewer, the candidate's four fields, the M8 receipt's digest, and the evidence checked. A reviewer receipt written before the M8 receipt is invalid.
+4. **One plain-language release note for Ty**, written only after both reviewer receipts exist:
+   - what changed;
+   - what it means for users;
+   - the remaining known risks;
+   - that both reviews agree, M1–M8 included.
+   Hashes may appear in it, but Ty is never asked to read or compare them.
+5. **Ty approves or rejects that named release.** The pending GitHub `release` environment run links to the note, because GitHub's native approval screen does not reliably show arbitrary digest text. Her click is the veto: no click, no release.
+6. **After approval, the signing job re-checks** the tarball digest, the key fingerprint, the M8 receipt, and both reviewer receipts, and that all three name exactly this artifact digest and candidate. A missing or mismatched receipt aborts the run before signing. Any change to the candidate voids the M8 receipt, both reviews and the approval; all must be redone.
+7. **Trigger and tag (Lam #41 F41-4; §10 Q9).** Releasing starts with a manual `workflow_dispatch` on protected `main`, carrying the candidate's digests; Ty's approval gates the signer job inside the `release` environment; only after signing does the separate publish job create the protected release tag on the recorded source commit and publish the draft. So no tag exists without M8, both receipts, Ty's approval and a valid signature. Every other Q9 condition stays unchanged: protected workflow, CODEOWNERS, no self-approval, an isolated signer, and a release receipt.
+
+### 12.2 `trajecta update`
+
+Updates reuse the install machinery exactly: Phase A/B/C (§5.2), a versioned root, the per-version Node path, `owned.json`, the atomic two-line `current`, `--rollback`, and no writes to stores.
+
+- **Trust:**
+  - Signed release metadata is verified with a key **the installed version already trusts**: its embedded root key, or a later key reached from it through the persisted rotation chain (below). A newly fetched key is never accepted on its own.
+  - The tarball's size and SHA-256 are verified, then the offline `MANIFEST.json`.
+  - **Key rotation chains:** a new key is accepted only through a rotation statement signed by the currently trusted key and shipped inside a release that the current key signed. Accepted rotation statements are appended to the shared update state, so a version rollback never forgets a rotation: an older binary walks the persisted chain from its own embedded key and uses the newest key reached. A chain that does not verify from the embedded key fails closed.
+- **Freshness:** the signed latest index carries a **monotonic sequence number** and an **expiry**.
+  - **Shared update state (Lam #41 F41-2).** The high-water sequence and the rotation chain live in `<root>/update-state.json`, **outside every version directory**. It is not listed in `owned.json`, so neither `--rollback` nor `uninstall --version` touches it; only a full uninstall removes it, under the owner-authorized exception in §5.4.
+  - It is written by temp file + fsync + atomic rename, under the install lock, and only **after** the new index has been verified and **before** any `current` switch. The sequence is **never decreased** by any command.
+  - It carries its own SHA-256 line. A refused lower sequence (replay) or an expired index (freeze) changes nothing.
+  - **Missing or corrupt state fails closed:** `update` refuses and prints the recovery: `trajecta update --reset-state` on a TTY with a typed confirmation, which rebuilds the state only from a freshly verified index whose sequence is at least the highest one recorded in the installed versions' `MANIFEST.json` files (each release's `MANIFEST.json` records the index sequence that published it). There is no silent re-creation.
+  - **Stated honestly:** `--reset-state` is an explicit **human trust reset**. It cannot reconstruct a higher sequence the machine once saw but never installed, so after a reset the high-water mark can be lower than before, and a replay of an index between the two is possible until a newer index is accepted. The confirmation text says so. Outside this command and the full-uninstall exception, the high-water mark never decreases.
+  - Full TUF-style protection is **deferred**, as an explicit developer-beta risk decision. The README discloses it.
+- **Exact order (Lam #41 F41-3).** No step writes a store. No step switches `current` while the target is incompatible with the current stores.
+  1. **Verify:** signed index (trust and freshness above), then tarball size, SHA-256 and `MANIFEST.json`.
+  2. **Stage:** Phase A and the Phase B rename (§5.2) put the target in `<root>/<ver>/` with its own Node path. `current` is **not** written.
+  3. **Inspect:** read the current stores' schema versions read-only, and check them against the target's `compat.json`, plus the Node major and OS.
+  4. **Compatible:** write the update state, switch `current` atomically, then Phase C and doctor, as in install.
+  5. **Not compatible (Node or OS):** refuse with the reason. The staged version stays as an inactive, ledgered directory and is removed by the next `update` or `uninstall --version`. `current` is unchanged.
+  6. **Needs a newer store schema:** do **not** switch. Print the exact procedure: the backup command, then `trajecta migrate-to <schema> --using <ver>`. Exit non-zero. `current` is unchanged, and the old version keeps working on the unmigrated store.
+- **`migrate-to --using <ver>`: verified staged execution.** It runs the migration with the **staged** target's engine without activating it:
+  - re-verify the staged directory's `MANIFEST.json` and require it to be a version `update` staged (ledgered);
+  - require the backup to exist and a typed confirmation on a TTY;
+  - invoke the staged version's engine by absolute path with its own recorded Node, under the install lock;
+  - after it succeeds, re-run step 3; only if the target is now compatible, switch `current` (step 4).
+  - If the migration fails, `migrate-to` exits non-zero, leaves `current` unchanged, and prints the exact restore-from-backup command. It never restores or deletes anything on its own. If it succeeds but the switch crashes, `current` still names the old version, which cannot read the store: `doctor` and every command then refuse with "store needs <ver>; run trajecta update" and nothing else. This relies on the engines' existing refusal of a newer store schema, which M3 asserts. A re-run of `update` finds the staged version, re-checks, and switches.
+- **Direction:**
+  - An ordinary downgrade is refused.
+  - Updating to the version already installed writes nothing.
+  - `--version <v>` selects a specific signed release, but **never** bypasses integrity, freshness or compatibility.
+- **Stores are never migrated automatically.** Only `migrate-to`, run by the user on a TTY, writes a schema.
+- **Rollback and data:** `--rollback` is **refused** if the previous version cannot read the current store, for example after a migration. The refusal names the backup to restore with.
+- **Checking for updates:**
+  - `trajecta doctor` stays **offline and read-only**. It may show a notice that was verified earlier and cached.
+  - `doctor --check-updates` and `update --check` make an explicit network check.
+  - Nothing ever downloads or installs on its own.
+- **What changed:** each release ships a `CHANGELOG.md` entry in plain language and a generated `compat.json`. `update` prints the changelog entries between the installed version and the target before switching.
+
+### 12.3 Gates added
+
+- **M2:** signed metadata (valid, tampered, wrong key, rotated key with chain, rotated key without chain, rotation remembered after `--rollback`); sequence replay and expiry; replay attempted after `--rollback`, after `uninstall --version` + reinstall, and after a crash at each update-state write; missing and corrupt update state fail closed; `--reset-state` sets the floor from installed MANIFESTs exactly, and the test pins that an index between that floor and the previously seen higher sequence is accepted only after the typed reset, never without it; downgrade and same-version refusal; compatibility preflight refusal; TTY-only `migrate-to` after an update.
+- **M3:** crashes at every Phase A/B/C boundary during an update, and around the update-state write; the exact order in 12.2, asserting that `current` never names an incompatible version; `migrate-to --using` from a staged target, a migration failure, and a crash between migration and switch followed by a converging re-run; re-run convergence; rollback, and its refusal after a migration.
+- **M5:** the plugin wrapper keeps working across an update without a rebuild.
+- **M3 (uninstall, F41-5):** `update-state.json` survives `uninstall --version`, `--rollback`, a refused or non-TTY full uninstall, a full uninstall where another removal failed, and a symlink at that path; it is removed only by a confirmed full uninstall with no version left.
+- **Release workflow (F41-4), checked before Ty's Q9 consent:** a dispatch from any ref other than `main`, a mismatched digest input, a missing receipt, or a tag created outside the workflow are each refused, run in a dry-run repository without the key.
+- **M7:** the old Python reader still reads stores written by the updated version.
+- **M8:** Ty's real-copy rehearsal, run on the release candidate by digest, producing the M8 receipt (12.1). The signing job refuses without it.
+
+R4b still owns Node bundling before any non-developer buyers.
