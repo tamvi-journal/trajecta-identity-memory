@@ -1,6 +1,6 @@
 # R4: the Trajecta product layer, installer, and cutover
 
-Status: approved by Lam @ 8dae7e3; §12 added after Ty's product question (Lam settlement 2026-10-11). Revised after Lam's review @ b121be5 (REQUEST CHANGES: F40-1..F40-4; Q1–Q8 yes with conditions; §11). Author: Aux (leader). Builds on R0–R3 and R2e (main @ efa5149).
+Status: approved by Lam @ 8dae7e3; §12 added after Ty's product question (Lam settlement 2026-10-11), revised after Lam #41 @ f10c11a (F41-1..F41-3). Revised after Lam's review @ b121be5 (REQUEST CHANGES: F40-1..F40-4; Q1–Q8 yes with conditions; §11). Author: Aux (leader). Builds on R0–R3 and R2e (main @ efa5149).
 
 ## 0. Goal, and what "done" means
 
@@ -297,61 +297,6 @@ Merge rule: unchanged. Lam approves the exact head, CI is green on that head, th
   - **Stated honestly:** approval gates access to the secret. It does not prove the workflow code is safe, or that the key never reaches the runner.
   - **Signing and release stay disabled until Ty approves this setup.**
 
-## 12. Release approval and updates (Ty's product question; Lam settlement 2026-10-11)
-
-Ty's question: *what do real products do, and what makes future feature updates easiest?* This section is an architectural settlement. It does **not** authorize any release or signing setup: that still needs Ty's explicit consent.
-
-### 12.1 Release approval in plain language (amends Q9)
-
-1. **One immutable candidate.** A candidate is fixed by four things: the version, the tarball SHA-256, the pinned engine SHAs, and the CI run IDs for M1–M7. If any of these changes, the candidate is new.
-2. **Two independent reviews.** Aux and Lam each verify the **same** candidate on their own and attach a **reviewer receipt** to the draft release. A receipt records the reviewer, the candidate's four fields, and the evidence checked.
-3. **One plain-language release note for Ty:**
-   - what changed;
-   - what it means for users;
-   - the remaining known risks;
-   - that both reviews agree.
-   Hashes may appear in it, but Ty is never asked to read or compare them.
-4. **Ty approves or rejects that named release.** The pending GitHub `release` environment run links to the note, because GitHub's native approval screen does not reliably show arbitrary digest text. Her click is the veto: no click, no release.
-5. **After approval, the signer re-checks** the tarball digest, the key fingerprint, and that both receipts name exactly this candidate. Any mismatch aborts the run. Any change to the candidate voids both reviews and requires a new approval.
-6. **M8 (Ty's real-copy rehearsal) stays separately mandatory** before the release tag. Every other Q9 condition stays unchanged: protected tags and workflow, CODEOWNERS, no self-approval, an isolated signer, and a release receipt.
-
-### 12.2 `trajecta update`
-
-Updates reuse the install machinery exactly: Phase A/B/C (§5.2), a versioned root, the per-version Node path, `owned.json`, the atomic two-line `current`, `--rollback`, and no writes to stores.
-
-- **Trust:**
-  - Signed release metadata is verified with a key **the installed version already trusts**, embedded in its own files. A newly fetched key is never accepted.
-  - The tarball's size and SHA-256 are verified, then the offline `MANIFEST.json`.
-  - **Key rotation chains:** a new key is accepted only through a rotation statement signed by the currently trusted key and shipped inside a release that the current key signed.
-- **Freshness:** the signed latest index carries a **monotonic sequence number** and an **expiry**.
-  - The installed version records the highest sequence it has accepted. It refuses a lower sequence (a replay) and an expired index (a freeze).
-  - Full TUF-style protection is **deferred**, as an explicit developer-beta risk decision. The README discloses it.
-- **Preflight, before any switch:**
-  - the store schema versions the target reads and writes (from `compat.json`) must cover the user's current stores;
-  - the target must support the current Node major and OS.
-  - If either check fails, the update refuses with the reason and changes nothing.
-- **Direction:**
-  - An ordinary downgrade is refused.
-  - Updating to the version already installed writes nothing.
-  - `--version <v>` selects a specific signed release, but **never** bypasses integrity, freshness or compatibility.
-- **Stores are never migrated silently.** If the target needs a newer store schema, `update` installs the code and then stops with the exact `migrate-to` command. That command still needs a backup and a typed confirmation on a TTY.
-- **Rollback and data:** `--rollback` is **refused** if the previous version cannot read the current store, for example after a migration. The refusal names the backup to restore with.
-- **Checking for updates:**
-  - `trajecta doctor` stays **offline and read-only**. It may show a notice that was verified earlier and cached.
-  - `doctor --check-updates` and `update --check` make an explicit network check.
-  - Nothing ever downloads or installs on its own.
-- **What changed:** each release ships a `CHANGELOG.md` entry in plain language and a generated `compat.json`. `update` prints the changelog entries between the installed version and the target before switching.
-
-### 12.3 Gates added
-
-- **M2:** signed metadata (valid, tampered, wrong key, rotated key with chain, rotated key without chain); sequence replay and expiry; downgrade and same-version refusal; compatibility preflight refusal; TTY-only `migrate-to` after an update.
-- **M3:** crashes at every Phase A/B/C boundary during an update; re-run convergence; rollback, and its refusal after a migration.
-- **M5:** the plugin wrapper keeps working across an update without a rebuild.
-- **M7:** the old Python reader still reads stores written by the updated version.
-- **M8:** Ty's real-copy rehearsal, run on the release candidate.
-
-R4b still owns Node bundling before any non-developer buyers.
-
 ## 11. Lam's reviews, and how they were applied
 
 ### @ 560742a (four remaining items)
@@ -385,3 +330,72 @@ R4b still owns Node bundling before any non-developer buyers.
   - §5.2: transaction boundaries, with the bootstrapped empty store declared a valid uncompensated state.
   - §5.4: uninstall removes owned, unchanged paths only.
 - **Q1–Q8:** yes, with Lam's conditions recorded inline. Q2 is for the developer beta only. Q3 holds after full 3-OS certification. Q4 holds after F40-1/F40-2. Q6 archives `import-aml` with its history kept. P25/P26 are explicit both-runtime oracle patches with audited corpus diffs (§7).
+- **#41 @ f10c11a (REQUEST CHANGES F41-1..F41-3):** F41-1, M8 receipt bound to the artifact digest, required before both reviewer receipts and Ty's approval, checked by the signing job (12.1). F41-2, shared monotonic `update-state.json` outside version directories, never decreased, fail-closed recovery, rotation chain kept across rollback (12.2). F41-3, exact verify → stage → inspect → switch-only-when-compatible order, and `migrate-to --using` as verified staged execution (12.2). §12 moved after §11.
+
+## 12. Release approval and updates (Ty's product question; Lam settlement 2026-10-11)
+
+Ty's question: *what do real products do, and what makes future feature updates easiest?* This section is an architectural settlement. It does **not** authorize any release or signing setup: that still needs Ty's explicit consent.
+
+### 12.1 Release approval in plain language (amends Q9)
+
+1. **One immutable candidate.** A candidate is fixed by four things: the version, the tarball SHA-256 (the **artifact digest**), the pinned engine SHAs, and the CI run IDs for M1–M7. If any of these changes, the candidate is new.
+2. **M8 is bound to the candidate (Lam #41 F41-1).** Ty's real-copy rehearsal (M8) runs on **this** tarball, installed by digest. It produces an **M8 receipt** that records the artifact digest, the OS and Node used, and the pass/fail of each M8 step. Aux or Lam reads the rehearsal output and writes the receipt; Ty only runs the rehearsal and is never asked to verify anything technical. An M8 receipt for any other digest does not count.
+3. **Two independent reviews, after M8.** Only once the M8 receipt exists do Aux and Lam each verify the **same** candidate on their own: M1–M7 from the CI run IDs and M8 from the M8 receipt, all naming the same artifact digest. Each attaches a **reviewer receipt** to the draft release. A receipt records the reviewer, the candidate's four fields, the M8 receipt's digest, and the evidence checked. A reviewer receipt written before the M8 receipt is invalid.
+4. **One plain-language release note for Ty**, written only after both reviewer receipts exist:
+   - what changed;
+   - what it means for users;
+   - the remaining known risks;
+   - that both reviews agree, M1–M8 included.
+   Hashes may appear in it, but Ty is never asked to read or compare them.
+5. **Ty approves or rejects that named release.** The pending GitHub `release` environment run links to the note, because GitHub's native approval screen does not reliably show arbitrary digest text. Her click is the veto: no click, no release.
+6. **After approval, the signing job re-checks** the tarball digest, the key fingerprint, the M8 receipt, and both reviewer receipts, and that all three name exactly this artifact digest and candidate. A missing or mismatched receipt aborts the run before signing. Any change to the candidate voids the M8 receipt, both reviews and the approval; all must be redone.
+7. **The release tag** is created only by that signing job, so no tag exists without M8. Every other Q9 condition stays unchanged: protected tags and workflow, CODEOWNERS, no self-approval, an isolated signer, and a release receipt.
+
+### 12.2 `trajecta update`
+
+Updates reuse the install machinery exactly: Phase A/B/C (§5.2), a versioned root, the per-version Node path, `owned.json`, the atomic two-line `current`, `--rollback`, and no writes to stores.
+
+- **Trust:**
+  - Signed release metadata is verified with a key **the installed version already trusts**: its embedded root key, or a later key reached from it through the persisted rotation chain (below). A newly fetched key is never accepted on its own.
+  - The tarball's size and SHA-256 are verified, then the offline `MANIFEST.json`.
+  - **Key rotation chains:** a new key is accepted only through a rotation statement signed by the currently trusted key and shipped inside a release that the current key signed. Accepted rotation statements are appended to the shared update state, so a version rollback never forgets a rotation: an older binary walks the persisted chain from its own embedded key and uses the newest key reached. A chain that does not verify from the embedded key fails closed.
+- **Freshness:** the signed latest index carries a **monotonic sequence number** and an **expiry**.
+  - **Shared update state (Lam #41 F41-2).** The high-water sequence and the rotation chain live in `<root>/update-state.json`, **outside every version directory**. It is not listed in `owned.json`, so neither `--rollback` nor `uninstall --version` touches it; only a full uninstall removes it, and only after a typed confirmation that warns that replay protection resets.
+  - It is written by temp file + fsync + atomic rename, under the install lock, and only **after** the new index has been verified and **before** any `current` switch. The sequence is **never decreased** by any command.
+  - It carries its own SHA-256 line. A refused lower sequence (replay) or an expired index (freeze) changes nothing.
+  - **Missing or corrupt state fails closed:** `update` refuses and prints the recovery: `trajecta update --reset-state` on a TTY with a typed confirmation, which rebuilds the state only from a freshly verified index whose sequence is at least the highest one recorded in the installed versions' `MANIFEST.json` files (each release's `MANIFEST.json` records the index sequence that published it). There is no silent re-creation.
+  - Full TUF-style protection is **deferred**, as an explicit developer-beta risk decision. The README discloses it.
+- **Exact order (Lam #41 F41-3).** No step writes a store. No step switches `current` while the target is incompatible with the current stores.
+  1. **Verify:** signed index (trust and freshness above), then tarball size, SHA-256 and `MANIFEST.json`.
+  2. **Stage:** Phase A and the Phase B rename (§5.2) put the target in `<root>/<ver>/` with its own Node path. `current` is **not** written.
+  3. **Inspect:** read the current stores' schema versions read-only, and check them against the target's `compat.json`, plus the Node major and OS.
+  4. **Compatible:** write the update state, switch `current` atomically, then Phase C and doctor, as in install.
+  5. **Not compatible (Node or OS):** refuse with the reason. The staged version stays as an inactive, ledgered directory and is removed by the next `update` or `uninstall --version`. `current` is unchanged.
+  6. **Needs a newer store schema:** do **not** switch. Print the exact procedure: the backup command, then `trajecta migrate-to <schema> --using <ver>`. Exit non-zero. `current` is unchanged, and the old version keeps working on the unmigrated store.
+- **`migrate-to --using <ver>`: verified staged execution.** It runs the migration with the **staged** target's engine without activating it:
+  - re-verify the staged directory's `MANIFEST.json` and require it to be a version `update` staged (ledgered);
+  - require the backup to exist and a typed confirmation on a TTY;
+  - invoke the staged version's engine by absolute path with its own recorded Node, under the install lock;
+  - after it succeeds, re-run step 3; only if the target is now compatible, switch `current` (step 4).
+  - If the migration fails, `migrate-to` exits non-zero, leaves `current` unchanged, and prints the exact restore-from-backup command. It never restores or deletes anything on its own. If it succeeds but the switch crashes, `current` still names the old version, which cannot read the store: `doctor` and every command then refuse with "store needs <ver>; run trajecta update" and nothing else. This relies on the engines' existing refusal of a newer store schema, which M3 asserts. A re-run of `update` finds the staged version, re-checks, and switches.
+- **Direction:**
+  - An ordinary downgrade is refused.
+  - Updating to the version already installed writes nothing.
+  - `--version <v>` selects a specific signed release, but **never** bypasses integrity, freshness or compatibility.
+- **Stores are never migrated automatically.** Only `migrate-to`, run by the user on a TTY, writes a schema.
+- **Rollback and data:** `--rollback` is **refused** if the previous version cannot read the current store, for example after a migration. The refusal names the backup to restore with.
+- **Checking for updates:**
+  - `trajecta doctor` stays **offline and read-only**. It may show a notice that was verified earlier and cached.
+  - `doctor --check-updates` and `update --check` make an explicit network check.
+  - Nothing ever downloads or installs on its own.
+- **What changed:** each release ships a `CHANGELOG.md` entry in plain language and a generated `compat.json`. `update` prints the changelog entries between the installed version and the target before switching.
+
+### 12.3 Gates added
+
+- **M2:** signed metadata (valid, tampered, wrong key, rotated key with chain, rotated key without chain, rotation remembered after `--rollback`); sequence replay and expiry; replay attempted after `--rollback`, after `uninstall --version` + reinstall, and after a crash at each update-state write; missing and corrupt update state fail closed; downgrade and same-version refusal; compatibility preflight refusal; TTY-only `migrate-to` after an update.
+- **M3:** crashes at every Phase A/B/C boundary during an update, and around the update-state write; the exact order in 12.2, asserting that `current` never names an incompatible version; `migrate-to --using` from a staged target, a migration failure, and a crash between migration and switch followed by a converging re-run; re-run convergence; rollback, and its refusal after a migration.
+- **M5:** the plugin wrapper keeps working across an update without a rebuild.
+- **M7:** the old Python reader still reads stores written by the updated version.
+- **M8:** Ty's real-copy rehearsal, run on the release candidate by digest, producing the M8 receipt (12.1). The signing job refuses without it.
+
+R4b still owns Node bundling before any non-developer buyers.
