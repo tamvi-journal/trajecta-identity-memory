@@ -119,7 +119,7 @@ Aux ran a differential fuzz: the Python worker and the TS worker on copies of th
 
 | Input | Python | TS |
 |---|---|---|
-| more than 100 header fields | 431 | **200 (serves)** |
+| a header block of more than 100 physical lines (see below) | 431 | **200 (serves)** |
 | raw non-ASCII bytes in the request-target (RFC 3986 forbids them; browsers percent-encode) | 200, with the cue decoded as Latin-1 mojibake | 400 |
 | whitespace between the header name and the colon (`Host : …`) | 403 | 400 |
 | an obs-fold continuation of Host | 403 | 400 |
@@ -129,7 +129,19 @@ Aux ran a differential fuzz: the Python worker and the TS worker on copies of th
 **Law F-1. The TS view may be stricter than the oracle on invalid HTTP framing, never more permissive.**
 - For any request that Python refuses with a status of 400 or above, TS must also refuse with a status of 400 or above, through the common header path, writing nothing.
 - For any request that is valid HTTP/1.1 (RFC 9112, with a request-target allowed by RFC 3986), TS must match the oracle exactly. That is view-v1 plus the fuzz above.
-- The more-than-100-headers case breaks F-1. **TS must answer 431** before routing, but after the P21 Host/Origin guard has passed, matching Python's limit. A regression test is required.
+- The header-count case breaks F-1. TS must reproduce the oracle's limit exactly (Codex STOP @ 08e9ccf; Aux checked it against `http.client._read_headers`). The law:
+  - Python appends **every physical header line** to its list before testing `len > 100`. That includes continuation (obs-fold) lines **and the terminating blank line**, and the test runs before the end of the headers is checked.
+  - So a request is refused with **431**, with the body exactly `Too many headers`, through the common header path and with no write, when its header block has more than 100 physical lines counting that blank line. In other words, 99 ordinary fields are served and 100 are refused.
+  - This check is part of request parsing, so it runs **before** the P21 guard, as in Python. With 100 fields and an evil Host, the answer is 431, not 403.
+- **Regression tests** (TS, and the same requests against the Python oracle):
+  - 99 fields: 200.
+  - 100 fields: 431.
+  - 101 fields: 431.
+  - 98 fields plus one folded continuation line: 200.
+  - 99 fields plus one folded continuation line: 431.
+  - 100 fields with an evil Host: 431.
+  - Every count includes Host. No implicit headers are added.
+  - Store bytes, mtime and inventory stay unchanged.
 - The other five rows are allowed under F-1 and are frozen as **G17**.
 
 ## 4. Frozen gaps
