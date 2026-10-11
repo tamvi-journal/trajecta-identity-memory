@@ -188,12 +188,17 @@ It is **not** `npm pack`. npm publish is not used in R4.
   - If a `.json` or URL profile would overwrite an installed profile of the same name, and the canonical JSON bytes differ, the command refuses with a typed error (`ProfileConflict: profile '<name>' differs from the installed copy; pass --replace-profile to overwrite`) and exits 1, with no write.
   - `--replace-profile` keeps today's overwrite, after writing a backup `profile.json.<UTC timestamp>.bak`.
   - Identical bytes are a no-op.
+  - **Comparison:** both sides are canonicalized as R0 canonical JSON (sorted keys, the Python-compatible separators, `ensure_ascii=False`, UTF-8), then compared byte for byte. A profile that is not valid JSON is refused, as it is today, before any comparison.
+  - **Backup name:** `profile.json.<UTC YYYYMMDDTHHMMSSffffffZ>.bak`. If that name already exists, append `.1`, `.2` and so on; an existing file is never overwritten.
+  - **Failure:** the backup is written first. The new profile is written to a temporary file in the same folder and committed with `os.replace` (P22 pattern). On any failure the installed `profile.json` keeps its exact bytes, and a backup that was already written is left in place and reported.
   - The corpus case that pins today's overwrite is replaced by three cases: conflict, replace and identical.
 - **G14 → P26, a dry run leaves nothing.** This is an explicit **oracle patch in both runtimes**, with the same audited-diff rule as P25. The frozen R2d G14 history stays in the R2d spec; it is superseded, not rewritten.
   - `migrate-to --dry-run` records every parent directory it created.
   - On exit, success or failure, it removes exactly those, deepest first, and only if they are still empty.
   - A directory that existed before the dry run is never touched.
   - Corpus: a dry run on a missing parent chain leaves the original file tree.
+  - **Verification:** the test records the directory inventory before the run and checks that the inventory after is equal. A case where a parent appears *during* the dry run (created by another process) proves that directory is kept, because it is not in the created-by-this-run list.
+  - Frozen corpus payloads keep their provenance. The pinned G14 case is replaced by name, and the R2d spec text is not edited.
 - **G17: keep Law F-1 as the permanent product HTTP law (Q5).** On malformed or over-limit input, TS may be stricter than the oracle, never more permissive. G17 closes as accepted. The wording nit, "oversized header line" meaning over the limit, is fixed in the same PR.
 - **`import-aml`: archive (Q6).** It moves to `tools/archive/` with a README, it is not shipped, and it is not ported. It was a one-shot import for Ty's own AML vault, not product write law.
 
