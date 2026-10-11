@@ -123,7 +123,6 @@ test("argparse grammar, defaults, abbreviations and no authority bypass", () => 
     ["timeline", "--limit", "-1_2"],
     ["log-fact", "x", "--title", "-x", "--summary", "s"],
     ["import-aml", "vault"],
-    ["view"],
     ["plugin"],
   ])
     assert.throws(() => parseArgs(argv));
@@ -364,10 +363,10 @@ for (const table of ["isalnum", "decimal", "whitespace"])
   test(`pinned CLI ${table} table refuses altered bytes before parsing`, (t) => {
     const root = workspace(t);
     cpSync(resolve(ROOT, "node/src"), resolve(root, "node/src"), { recursive: true });
-    mkdirSync(resolve(root, "spec/golden-cli-v1"), { recursive: true });
+    mkdirSync(resolve(root, "node/tables"), { recursive: true });
     for (const name of ["isalnum", "decimal", "whitespace"])
-      copyFileSync(resolve(CORPUS, `${name}.json`), resolve(root, `spec/golden-cli-v1/${name}.json`));
-    const path = resolve(root, `spec/golden-cli-v1/${table}.json`);
+      copyFileSync(resolve(CORPUS, `${name}.json`), resolve(root, `node/tables/cli-${name}.json`));
+    const path = resolve(root, `node/tables/cli-${table}.json`);
     writeFileSync(path, Buffer.concat([readFileSync(path), Buffer.from(" ")]));
     const operation = table === "isalnum" ? "isAlnum(65)" : 'parseIntToken("1")';
     const code = `import {isAlnum,parseIntToken} from ${JSON.stringify(pathToFileURL(resolve(root, "node/src/cli-tables.ts")).href)}; ${operation};`;

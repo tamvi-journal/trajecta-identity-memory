@@ -11,7 +11,7 @@ const PINNED: Record<string, string> = {
 const cache = new Map<string, OrderedObject>();
 function table(name: string): OrderedObject {
   if (cache.has(name)) return cache.get(name)!;
-  const path = fileURLToPath(new URL(`../../spec/golden-cli-v1/${name}.json`, import.meta.url));
+  const path = fileURLToPath(new URL(`../tables/cli-${name}.json`, import.meta.url));
   const raw = readFileSync(path);
   if (createHash("sha256").update(raw).digest("hex") !== PINNED[name])
     throw new Error(`CLI ${name} table sha256 mismatch`);

@@ -86,6 +86,7 @@ const GRAMMAR: Record<string, Grammar> = {
   setup: { values: ["name"] },
   profiles: {},
   work: {},
+  view: { values: ["port"], flags: ["no-browser"], defaults: { port: 8767 } },
   status: {},
   doctor: {},
   retrieve: {
@@ -182,7 +183,7 @@ export function parseArgs(argv: string[]): Record<string, any> {
           (value.startsWith("-") && value !== "-" && !argparseNegative(value) && inline === undefined)
         )
           commandUsage(`argument --${key}: expected one argument`);
-        if (key === "limit" || key === "budget") {
+        if (key === "limit" || key === "budget" || key === "port") {
           try {
             result[key] = parseIntToken(value);
           } catch {
@@ -305,6 +306,12 @@ export async function main(argv = process.argv.slice(2), options: CliOptions = {
       }
     };
     switch (command) {
+      case "view": {
+        if (memory.store.schemaInfo().state === "uninitialized") memory.bootstrap();
+        const { serve } = await import("./view.ts");
+        await serve(memory, { port: Number(args.port), openBrowser: !args.no_browser, stdout });
+        return 0;
+      }
       case "init":
         result = memory.bootstrap();
         break;
