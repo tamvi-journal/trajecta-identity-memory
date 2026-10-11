@@ -124,7 +124,7 @@ Aux ran a differential fuzz: the Python worker and the TS worker on copies of th
 | whitespace between the header name and the colon (`Host : …`) | 403 | 400 |
 | an obs-fold continuation of Host | 403 | 400 |
 | an HTTP/0.9 request line, or non-HTTP bytes | a status-less 0.9 reply | 400 or 403 |
-| an oversized header line | 431 | 400 |
+| an over-limit header line | 431 | 400 |
 
 **Law F-1. On malformed or over-limit input, the TS view may be stricter than the oracle, never more permissive.** Well-formed HTTP/1.1 that is within the oracle's parser resource limits stays exact.
 - For any request that Python refuses with a status of 400 or above, TS must also refuse with a status of 400 or above, through the common header path, writing nothing.
@@ -154,7 +154,7 @@ Aux ran a differential fuzz: the Python worker and the TS worker on copies of th
 |---|---|---|
 | G15 | `snapshot()` bootstraps an `uninitialized` store (V6). The branch is only reachable if the store disappears while serving. Both runtimes keep it. It is an **explicit exception to read purity** (§3.3), pinned by its own corpus case: delete the store while serving, request `/api/snapshot`, and compare the resulting store with a Python bootstrap | R5: a read surface should show an empty state, not write |
 | G16 | A non-GET method gets a response whose body and exact status are not a contract. Both runtimes must answer with a status of 400 or above, pass the P21 guard and response policy first (§2.1), and write nothing. A test proves no store change | R5 |
-| G17 | On requests that are not valid HTTP/1.1 (raw non-ASCII bytes in the target, whitespace before a colon, obs-fold, HTTP/0.9 or non-HTTP bytes, oversized header lines), TS refuses with a status of 400 or above where the oracle answers 0.9-style, with 403/431, or with 200 on mojibake. Law F-1 (§3.4) forbids the opposite direction | R4: one HTTP framing law for the product view, or a decision to keep F-1 |
+| G17 | On malformed or over-limit requests (raw non-ASCII bytes in the target, whitespace before a colon, obs-fold, HTTP/0.9 or non-HTTP bytes, over-limit header lines), TS refuses with a status of 400 or above where the oracle answers 0.9-style, with 403/431, or with 200 on mojibake. Law F-1 (§3.4) forbids the opposite direction | Closed by R4 Q5: accepted permanently under Law F-1 |
 
 ## 5. K: the plugin contract now, the builder at R4 (Q2)
 

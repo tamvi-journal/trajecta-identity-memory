@@ -140,8 +140,6 @@ def parser() -> argparse.ArgumentParser:
     migrate.add_argument("target", type=Path)
     migrate.add_argument("--dry-run", action="store_true")
     migrate.add_argument("--backup", type=Path)
-    aml = commands.add_parser("import-aml", help="import an AML vault (read-only)")
-    aml.add_argument("path", type=Path)
     return root
 
 
@@ -286,11 +284,7 @@ def _execute(args) -> None:
             args.target, dry_run=args.dry_run, backup_path=args.backup
         )
         result = migrated if isinstance(migrated, dict) else migrated.schema_info()
-    elif command == "import-aml":
-        memory.bootstrap()
-        from .migrate_aml import import_aml
 
-        result = import_aml(memory, args.path)
     else:  # pragma: no cover
         raise SystemExit(f"unknown command {command}")
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))

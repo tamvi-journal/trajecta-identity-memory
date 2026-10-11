@@ -8,11 +8,15 @@ import sys
 import tempfile
 import urllib.request
 import venv
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def check(wheel):
+    with zipfile.ZipFile(wheel) as archive:
+        assert "trajecta_identity/migrate_aml.py" not in archive.namelist(), "archived importer shipped"
+        assert not any(name.startswith("tools/archive/") for name in archive.namelist())
     with tempfile.TemporaryDirectory(prefix="installed-view-") as temporary:
         root = Path(temporary)
         environment = root / "venv"
@@ -55,5 +59,20 @@ def check(wheel):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("wheel", type=Path)
-    check(parser.parse_args().wheel)
+    parser.add_argument("wheel", type=Path, nargs="?")
+    parser.add_argument("--wheel-dir", type=Path)
+    args = parser.parse_args()
+    if args.wheel_dir:
+        try:
+            import tomllib
+        except ModuleNotFoundError:  # Python 3.10; this acceptance already requires pip.
+            from pip._vendor import tomli as tomllib
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf8"))["project"]
+        name = re.sub(r"[-_.]+", "_", project["name"])
+        matches = list(args.wheel_dir.glob(f"{name}-{project['version']}-*.whl"))
+        assert len(matches) == 1, (project, matches)
+        check(matches[0])
+    else:
+        if not args.wheel:
+            parser.error("wheel or --wheel-dir is required")
+        check(args.wheel)
