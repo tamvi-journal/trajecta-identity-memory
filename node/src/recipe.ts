@@ -8,7 +8,11 @@ import {
   readdirSync,
   statSync,
   writeFileSync,
+  renameSync,
+  unlinkSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { WallClock, type Clock } from "./clock.ts";
 import { basename, extname, join } from "node:path";
 import {
   compareCodePoint,
@@ -19,7 +23,7 @@ import {
   type JsonValue,
   type OrderedObject,
 } from "./encoding.ts";
-import { ValueError } from "./errors.ts";
+import { ProfileConflict, ValueError } from "./errors.ts";
 import { validateCore } from "./identity.ts";
 import { pythonIndentedJson } from "./authority.ts";
 import { asString, get, objectEntries, parseLossless } from "./json.ts";
@@ -78,9 +82,67 @@ export function remember(value: string, env: Environment = process.env): void {
     /* Python remembers best-effort only. */
   }
 }
-function install(data: OrderedObject, env: Environment): string {
+function install(
+  data: OrderedObject,
+  env: Environment,
+  replaceProfile = false,
+  clock: Clock = new WallClock(),
+): string {
   const name = pyStrip(asString(get(data, "name")));
   const target = join(dataDir(process.platform, env), "profiles", safeFsName(name));
+  const installed = join(target, "profile.json");
+  if (existsSync(installed)) {
+    const old = readFileSync(installed);
+    const incoming = strictProfileUtf8(pythonIndentedJson(data, 2, true) + "\n");
+    if (old.equals(incoming)) return name;
+    if (!replaceProfile)
+      throw new ProfileConflict(
+        `profile '${name}' differs from the installed copy; pass --replace-profile to overwrite`,
+      );
+    const stamp = clock.micros().replaceAll(/[-:]/gu, "").replace(".", "").replace("+0000", "Z");
+    const base = installed + `.${stamp}.bak`;
+    let backup = base,
+      suffix = 0,
+      fd: number;
+    while (true) {
+      try {
+        fd = openSync(backup, "wx");
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        suffix++;
+        backup = base + `.${suffix}`;
+      }
+    }
+    try {
+      try {
+        writeFileSync(fd!, old);
+      } finally {
+        closeSync(fd!);
+      }
+    } catch (error) {
+      process.stderr.write(`profile backup: ${backup}\n`);
+      throw error;
+    }
+    let temporary: string | null = null;
+    try {
+      const path = join(target, `.profile-${randomUUID()}.json`);
+      const tempFd = openSync(path, "wx");
+      temporary = path;
+      try {
+        writeFileSync(tempFd, incoming);
+      } finally {
+        closeSync(tempFd);
+      }
+      renameSync(temporary, installed);
+    } catch (error) {
+      process.stderr.write(`profile backup: ${backup}\n`);
+      throw error;
+    } finally {
+      if (temporary !== null && existsSync(temporary)) unlinkSync(temporary);
+    }
+    return name;
+  }
   mkdirSync(target, { recursive: true });
   // Path.write_text opens/truncates first; strict encode failure leaves the empty file.
   const fd = openSync(join(target, "profile.json"), "w");
@@ -132,18 +194,18 @@ export function loadByName(value: string, env: Environment = process.env): Ident
 }
 export async function resolveProfile(
   spec?: string,
-  options: { env?: Environment; rememberChoice?: boolean } = {},
+  options: { env?: Environment; rememberChoice?: boolean; replaceProfile?: boolean; clock?: Clock } = {},
 ): Promise<IdentityProfile> {
   const env = options.env ?? process.env;
   const chosen = pyStrip(spec ?? "") || pyStrip(env.TRAJECTA_IDENTITY_PROFILE ?? "") || lastProfile(env) || "example";
   let profile: IdentityProfile;
   if (chosen.startsWith("https://") || chosen.startsWith("http://"))
-    profile = loadByName(install(await fetchProfile(chosen), env), env);
+    profile = loadByName(install(await fetchProfile(chosen), env, options.replaceProfile, options.clock), env);
   else {
     const path = expandUser(chosen, env);
     profile =
       isFile(path) && extname(path).toLowerCase() === ".json"
-        ? loadByName(install(check(readJson(path), path), env), env)
+        ? loadByName(install(check(readJson(path), path), env, options.replaceProfile, options.clock), env)
         : loadByName(chosen, env);
   }
   if (options.rememberChoice !== false) remember(chosen, env);

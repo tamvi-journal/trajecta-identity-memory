@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   rmSync,
+  rmdirSync,
   openSync,
   readFileSync,
   readSync,
@@ -641,10 +642,27 @@ export class MemoryStore {
       // Outside cleanup: an aliased target must never cause backup deletion.
       if (existsSync(target)) throw new FileExistsError(target);
     }
-    if (options.dryRun) mkdirSync(dirname(resolve(target)), { recursive: true });
-    const rehearsal = options.dryRun ? mkdtempSync(resolve(dirname(target), "trajecta-migrate-dry-run-")) : null;
-    const work = rehearsal ? resolve(rehearsal, "store.sqlite3") : target;
+    const created: string[] = [];
+    const makeParent = (path: string): void => {
+      try {
+        mkdirSync(path);
+        created.push(path);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT") {
+          makeParent(dirname(path));
+          makeParent(path);
+        } else if (code !== "EEXIST" || !statSync(path).isDirectory()) throw error;
+      }
+    };
+    let rehearsal: string | null = null;
+    let work = target;
     try {
+      if (options.dryRun) {
+        makeParent(dirname(resolve(target)));
+        rehearsal = mkdtempSync(resolve(dirname(target), "trajecta-migrate-dry-run-"));
+        work = resolve(rehearsal, "store.sqlite3");
+      }
       copyFileSync(this.path, work);
       readHeader(work);
       const database = openDatabase(work, { enableForeignKeyConstraints: true, timeout: 5000 });
@@ -677,6 +695,13 @@ export class MemoryStore {
       throw error;
     } finally {
       if (rehearsal) rmSync(rehearsal, { recursive: true, force: true });
+      for (const path of created.reverse()) {
+        try {
+          rmdirSync(path);
+        } catch {
+          /* Keep other processes' content. */
+        }
+      }
     }
   }
   migrateV4To(target: string, backup: string): MemoryStore {
