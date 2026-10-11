@@ -246,3 +246,40 @@ test("P26 rehearsal creation failure never deletes another actor's target", (t) 
   assert.equal(fs.readFileSync(target, "utf8"), "another actor");
   assert.deepEqual(fs.readFileSync(source), before);
 });
+
+for (const mode of [0o644, 0o640])
+  test(
+    `P25 replacement preserves POSIX mode ${mode.toString(8)}`,
+    { skip: process.platform === "win32" },
+    async (t) => {
+      const f = fixture(t);
+      await resolveProfile(f.incoming, { env: f.env, rememberChoice: false });
+      fs.chmodSync(f.target, mode);
+      fs.writeFileSync(f.incoming, f.raw.replace('"name": "example"', '"name": "example", "extra": true'));
+      await resolveProfile(f.incoming, { env: f.env, rememberChoice: false, replaceProfile: true });
+      assert.equal(fs.statSync(f.target).mode & 0o7777, mode);
+    },
+  );
+
+test("P26 unreachable root rethrows the original ENOENT", (t) => {
+  const f = fixture(t),
+    source = join(f.root, "source.sqlite3");
+  fs.copyFileSync(join(ROOT, "spec/golden/identity-open/store.sqlite3"), source);
+  const before = inventory(f.root),
+    original = fs.mkdirSync;
+  const error = Object.assign(new Error("synthetic unreachable root"), { code: "ENOENT" });
+  fs.mkdirSync = (() => {
+    throw error;
+  }) as any;
+  syncBuiltinESMExports();
+  try {
+    assert.throws(
+      () => new MemoryStore(source).migrateTo(join(f.root, "missing/target.sqlite3"), { dryRun: true }),
+      (caught) => caught === error,
+    );
+  } finally {
+    fs.mkdirSync = original;
+    syncBuiltinESMExports();
+  }
+  assert.deepEqual(inventory(f.root), before);
+});

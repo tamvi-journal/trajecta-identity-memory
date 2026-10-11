@@ -217,3 +217,29 @@ def test_number_kind_is_not_erased_by_canonical_comparison(installed):
     incoming.write_text(json.dumps(data), encoding="utf8")
     with pytest.raises(ValueError, match="differs from the installed copy"):
         recipe.resolve(str(incoming), remember_choice=False)
+
+
+@pytest.mark.skipif(__import__('os').name == 'nt', reason='POSIX permission bits; Windows has no equivalent chmod mode law')
+@pytest.mark.parametrize('mode', [0o644, 0o640])
+def test_replace_preserves_installed_posix_mode(installed, mode):
+    import stat
+    data, incoming, target = installed
+    target.chmod(mode)
+    data['core']['summary'] = 'replacement'
+    incoming.write_text(json.dumps(data), encoding='utf8')
+    recipe.resolve(str(incoming), remember_choice=False, replace_profile=True)
+    assert stat.S_IMODE(target.stat().st_mode) == mode
+
+
+def test_dry_run_unreachable_root_reraises_original_enoent(tmp_path, monkeypatch):
+    import errno
+    source = tmp_path / 'source.sqlite3'
+    shutil.copyfile(LEGACY, source)
+    before = inventory(tmp_path)
+    error = FileNotFoundError(errno.ENOENT, 'synthetic unreachable root')
+    def fail(*a, **k): raise error
+    monkeypatch.setattr(Path, 'mkdir', fail)
+    with pytest.raises(FileNotFoundError) as caught:
+        MemoryStore(source).migrate_to(tmp_path / 'missing/target.sqlite3', dry_run=True)
+    assert caught.value is error
+    assert inventory(tmp_path) == before

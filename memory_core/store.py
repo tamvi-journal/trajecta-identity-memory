@@ -458,6 +458,8 @@ class MemoryStore:
                 try:
                     path.mkdir()
                 except FileNotFoundError:
+                    if path.parent == path:
+                        raise
                     make_parent(path.parent)
                     make_parent(path)
                 except FileExistsError:

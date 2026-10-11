@@ -10,14 +10,14 @@
             "oracle_sources",
             "memory_core/store.py"
           ],
-          "new_sha256": "2de4aa5f64c7240848083882ca193a0913d22669e28c8259f615f776ba6974ae",
+          "new_sha256": "fdb5b24313a9d60515c76c34e46cacdff6d29c3ada0a99336eb0d8177c05d414",
           "old_sha256": "91bbbdbf886173c7a070040b11c5348c3d37cf3663ace38066fb06bf53db3e4f"
         },
         {
           "field": [
             "oracle_source_sha256"
           ],
-          "new_sha256": "dda72cc08d6b2c2f424b84e777768b0cbc56af977428a3fa03ff76cdf86aed22",
+          "new_sha256": "ad79dc9f5c3aef8b3514ec010aa43c8184e159bc0b418cdb67ad62d9b571159b",
           "old_sha256": "65a73f4dec57e1daba60e613f0d4b4c3b78795bb33f79addcc996b3ee917e8e0"
         }
       ],
@@ -41,7 +41,7 @@
             "oracle_sources",
             "memory_core/store.py"
           ],
-          "new_sha256": "2de4aa5f64c7240848083882ca193a0913d22669e28c8259f615f776ba6974ae",
+          "new_sha256": "fdb5b24313a9d60515c76c34e46cacdff6d29c3ada0a99336eb0d8177c05d414",
           "old_sha256": "91bbbdbf886173c7a070040b11c5348c3d37cf3663ace38066fb06bf53db3e4f"
         },
         {
@@ -65,7 +65,7 @@
             "oracle_sources",
             "trajecta_identity/recipe.py"
           ],
-          "new_sha256": "c55718c0598350a7c41aa2aa18a8c57eb3d57e2b2c743fde2324a80549baf88e",
+          "new_sha256": "488096f062a3d0837a3789f16beef8852789db1986b51602ecc8c0c44bc4faf9",
           "old_sha256": "87456368ef552317832794019737dbb737613cda20aff471aadb5142907608cc"
         }
       ],
@@ -89,7 +89,7 @@
             "oracle_sources",
             "memory_core/store.py"
           ],
-          "new_sha256": "2de4aa5f64c7240848083882ca193a0913d22669e28c8259f615f776ba6974ae",
+          "new_sha256": "fdb5b24313a9d60515c76c34e46cacdff6d29c3ada0a99336eb0d8177c05d414",
           "old_sha256": "91bbbdbf886173c7a070040b11c5348c3d37cf3663ace38066fb06bf53db3e4f"
         },
         {
@@ -113,7 +113,7 @@
             "oracle_sources",
             "trajecta_identity/recipe.py"
           ],
-          "new_sha256": "c55718c0598350a7c41aa2aa18a8c57eb3d57e2b2c743fde2324a80549baf88e",
+          "new_sha256": "488096f062a3d0837a3789f16beef8852789db1986b51602ecc8c0c44bc4faf9",
           "old_sha256": "87456368ef552317832794019737dbb737613cda20aff471aadb5142907608cc"
         }
       ],
@@ -137,7 +137,7 @@
             "oracle_sources",
             "memory_core/store.py"
           ],
-          "new_sha256": "2de4aa5f64c7240848083882ca193a0913d22669e28c8259f615f776ba6974ae",
+          "new_sha256": "fdb5b24313a9d60515c76c34e46cacdff6d29c3ada0a99336eb0d8177c05d414",
           "old_sha256": "91bbbdbf886173c7a070040b11c5348c3d37cf3663ace38066fb06bf53db3e4f"
         },
         {
@@ -161,7 +161,7 @@
             "oracle_sources",
             "trajecta_identity/recipe.py"
           ],
-          "new_sha256": "c55718c0598350a7c41aa2aa18a8c57eb3d57e2b2c743fde2324a80549baf88e",
+          "new_sha256": "488096f062a3d0837a3789f16beef8852789db1986b51602ecc8c0c44bc4faf9",
           "old_sha256": "87456368ef552317832794019737dbb737613cda20aff471aadb5142907608cc"
         }
       ],
@@ -197,7 +197,7 @@
             "oracle_sources",
             "memory_core/store.py"
           ],
-          "new_sha256": "2de4aa5f64c7240848083882ca193a0913d22669e28c8259f615f776ba6974ae",
+          "new_sha256": "fdb5b24313a9d60515c76c34e46cacdff6d29c3ada0a99336eb0d8177c05d414",
           "old_sha256": "91bbbdbf886173c7a070040b11c5348c3d37cf3663ace38066fb06bf53db3e4f"
         },
         {
@@ -229,7 +229,7 @@
             "oracle_sources",
             "trajecta_identity/recipe.py"
           ],
-          "new_sha256": "c55718c0598350a7c41aa2aa18a8c57eb3d57e2b2c743fde2324a80549baf88e",
+          "new_sha256": "488096f062a3d0837a3789f16beef8852789db1986b51602ecc8c0c44bc4faf9",
           "old_sha256": "87456368ef552317832794019737dbb737613cda20aff471aadb5142907608cc"
         }
       ],
@@ -257,7 +257,7 @@
             "oracle_sources",
             "memory_core/store.py"
           ],
-          "new_sha256": "2de4aa5f64c7240848083882ca193a0913d22669e28c8259f615f776ba6974ae",
+          "new_sha256": "fdb5b24313a9d60515c76c34e46cacdff6d29c3ada0a99336eb0d8177c05d414",
           "old_sha256": "91bbbdbf886173c7a070040b11c5348c3d37cf3663ace38066fb06bf53db3e4f"
         },
         {
@@ -281,7 +281,7 @@
             "oracle_sources",
             "trajecta_identity/recipe.py"
           ],
-          "new_sha256": "c55718c0598350a7c41aa2aa18a8c57eb3d57e2b2c743fde2324a80549baf88e",
+          "new_sha256": "488096f062a3d0837a3789f16beef8852789db1986b51602ecc8c0c44bc4faf9",
           "old_sha256": "87456368ef552317832794019737dbb737613cda20aff471aadb5142907608cc"
         }
       ],

@@ -650,6 +650,7 @@ export class MemoryStore {
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code === "ENOENT") {
+          if (dirname(path) === path) throw error;
           makeParent(dirname(path));
           makeParent(path);
         } else if (code !== "EEXIST" || !statSync(path).isDirectory()) throw error;

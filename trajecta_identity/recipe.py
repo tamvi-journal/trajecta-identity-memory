@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import sys
 import tempfile
 import urllib.request
@@ -105,6 +106,7 @@ def _install(data: dict[str, Any], env: dict[str, str] | None = None,
             fd, temporary = tempfile.mkstemp(prefix=".profile-", suffix=".json", dir=target)
             with os.fdopen(fd, "wb") as out:
                 out.write(incoming)
+            os.chmod(temporary, stat.S_IMODE(installed.stat().st_mode))
             os.replace(temporary, installed)
         except Exception:
             print(f"profile backup: {backup}", file=sys.stderr)

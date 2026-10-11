@@ -2,6 +2,7 @@ import { strictUtf8, parseProfileJson, strictProfileUtf8 } from "./cli-decode.ts
 import {
   openSync,
   closeSync,
+  fchmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -131,6 +132,7 @@ function install(
       temporary = path;
       try {
         writeFileSync(tempFd, incoming);
+        fchmodSync(tempFd, statSync(installed).mode & 0o7777);
       } finally {
         closeSync(tempFd);
       }
