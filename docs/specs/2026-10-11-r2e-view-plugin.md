@@ -131,6 +131,48 @@ Today `plugin` packs the **Python** sources into the `.plugin` file, together wi
 
 K1–K5 are **executable now**: Python's `test_plugin.py` is extended to cover them, so the contract is checked against the oracle from today. K6 is **declared now and accepted at R4 (F8)**. R2e ships no test for it, because the value it would pin is not settled yet.
 
+### 5.1 P22 and P23: the oracle violates K2 and K5 (Codex STOP @ 13ba744)
+
+Codex wrote the K-tests before any production edit. Three of them fail against today's Python, and Aux confirmed the cause of each in `trajecta_identity/plugin.py`:
+
+- **K2 broken:**
+  - `build_plugin` writes the zip to a temporary file in the **system** temp directory. If `os.replace` fails, it falls back to `shutil.copyfile(tmp, out)`.
+  - If the copy fails partway, a partial `.plugin` is left behind, and an existing good file is overwritten. Cleanup removes only `tmp`.
+- **K5 broken:**
+  - The Windows `launch.py` keeps `sys.executable` even when it is older than 3.10 and no other candidate is found.
+  - The candidates it does find are never version-checked.
+  - So it starts the server on an unsupported Python instead of refusing.
+
+Under §7, an accepted invariant cannot become a deferred gap. Both are fixed in PR 2 as narrow oracle patches. They change only what the plugin builder writes, never memory semantics.
+
+**P22 — atomic plugin write.**
+1. The temporary file is created **in the destination folder**, as `tempfile.mkstemp(dir=<out's folder>, prefix=".build-", suffix=".plugin")`. It is therefore on the same volume as the destination.
+2. After the zip is fully written and closed, the only commit step is `os.replace(tmp, out)`. There is **no copy fallback**.
+3. On any failure, before or during the replace:
+   - `tmp` is removed if it exists;
+   - an existing `out` keeps its exact bytes;
+   - no new `out` appears;
+   - the original exception propagates unchanged.
+4. If the destination folder does not allow creating the temporary file, the build fails at step 1, with no partial output.
+
+**P23 — the Windows launcher validates its runtime.**
+- The candidates, in order, are:
+  1. `sys.executable`;
+  2. `py -3`, if `py` is found;
+  3. `python3`;
+  4. `python`.
+- Each candidate is probed with `-c "import sys; sys.exit(sys.version_info < (3, 10))"`. The first one that exits 0 is used.
+- If no candidate passes, the launcher writes `<server>: need Python 3.10+` and a newline to stderr, exits 1, and starts no server. This is the same text as the POSIX launcher (K5).
+- The server name is rendered into `launch.py` at build time, as it already is for `identity.sh`.
+
+**Tests (PR 2):**
+- K2 is tested in two cases, each with a forced `os.replace` failure (`EXDEV`) and a failure in the middle of the write: no existing output, and an existing good output whose bytes must be unchanged.
+- K5 is tested with a launcher seam: an old interpreter and no valid candidate gives the refusal text and exit 1, and no server process starts. A valid second candidate is the one used.
+- These seams exercise the launcher's logic. They are not a claim of a real Windows run on Python 3.9.
+- K3 still holds: two builds with the same inputs produce the same entries and bytes.
+
+Both patches belong to the Python plugin payload, which R4 replaces with a Node payload. The R4 builder must still pass K2 and K5 (§5).
+
 ## 6. R5 (proposed, not settled here): the view as the product screen
 
 This section only records direction, so that R2e's API freeze (§3.1) does not block it. It opens as its own spec after R4.
@@ -181,6 +223,7 @@ An accepted invariant cannot be reclassified as a deferred gap just to keep the 
 - **Repo:** separate engines, a thin R4 product layer, a unified R5 experience, and no early monorepo merge (§6).
 
 Amendments applied in this revision:
+- P22 and P23 (§5.1), added after Codex's STOP on PR 2; awaiting Lam.
 - F1: Origin must match the request's own Host.
 - F2: fail-closed header handling and negative tests.
 - F3: the security headers apply to every method and every status.
