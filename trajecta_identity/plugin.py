@@ -54,17 +54,37 @@ import os, shutil, subprocess, sys
 root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 env = dict(os.environ)
 for key, value in {env!r}.items():
-    env.setdefault(key, os.path.expanduser(value))
+    if env.get(key):
+        continue
+    if value.startswith("~/") or value.startswith("$HOME/"):
+        home = os.path.expanduser("~")
+        if home == "~":
+            sys.stderr.write({server!r} + ": cannot resolve home folder for " + key + "\\n")
+            sys.exit(1)
+        value = home + value[1 if value.startswith("~/") else 5:]
+    env[key] = value
 env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
 env["PYTHONIOENCODING"] = "utf-8"
-python = sys.executable
-if sys.version_info < (3, 10):
-    for name in ("py", "python3", "python"):
-        found = shutil.which(name)
-        if found:
-            python = found
-            break
-cmd = [python] + (["-3"] if os.path.basename(python).lower().startswith("py.") else [])
+candidates = [[sys.executable]]
+for name in ("py", "python3", "python"):
+    found = shutil.which(name)
+    if found:
+        candidates.append([found] + (["-3"] if name == "py" else []))
+cmd = None
+for candidate in candidates:
+    try:
+        probe = subprocess.run(
+            candidate + ["-c", "import sys; sys.exit(sys.version_info < (3, 10))"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        continue
+    if probe.returncode == 0:
+        cmd = candidate
+        break
+if cmd is None:
+    sys.stderr.write({server!r} + ": need Python 3.10+\\n")
+    sys.exit(1)
 sys.exit(subprocess.call(cmd + ["-m", "trajecta_identity.mcp_server", "--profile", {profile!r}], env=env))
 '''
 
@@ -166,7 +186,7 @@ def plugin_files(profile: str, *, name: str | None = None, target: str | None = 
     else:
         launcher = f"{LAUNCHER_DIR}/launch.py"
         command = {"command": "python", "args": ["${CLAUDE_PLUGIN_ROOT}/" + launcher]}
-        files[launcher] = PY_LAUNCHER.format(profile=profile, env=env).encode("utf-8")
+        files[launcher] = PY_LAUNCHER.format(profile=profile, env=env, server=server).encode("utf-8")
 
     files[".mcp.json"] = (json.dumps({"mcpServers": {server: command}}, indent=2) + "\n").encode("utf-8")
 
@@ -198,19 +218,16 @@ def build_plugin(out: str | Path, profile: str, **kwargs: Any) -> dict[str, Any]
         server = json.loads(files[".claude-plugin/plugin.json"])["name"]
         out = out / f"{server}.plugin"
     out.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(suffix=".plugin", prefix=".build-")
-    os.close(fd)
+    fd, tmp = tempfile.mkstemp(dir=out.parent, suffix=".plugin", prefix=".build-")
     try:
+        os.close(fd)
         with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as archive:
             for name, data in files.items():
                 info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
                 info.compress_type = zipfile.ZIP_DEFLATED
                 info.external_attr = (0o755 if name.startswith(LAUNCHER_DIR + "/") else 0o644) << 16
                 archive.writestr(info, data)
-        try:
-            os.replace(tmp, out)
-        except OSError:  # temp dir on another volume, or the folder forbids rename
-            shutil.copyfile(tmp, out)
+        os.replace(tmp, out)
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)

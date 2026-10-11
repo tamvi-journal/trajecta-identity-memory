@@ -1,0 +1,1 @@
+{"action":"delete-store-while-serving","label":"g15-disappear","method":"GET","path":"/api/snapshot","response":{"body":"snapshot.body","headers":{"Cache-Control":"no-store","Content-Length":"2263","Content-Type":"application/json; charset=utf-8","Referrer-Policy":"no-referrer","X-Content-Type-Options":"nosniff","X-Frame-Options":"DENY"},"status":200},"store_unchanged":false}
