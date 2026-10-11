@@ -134,10 +134,9 @@ jobs:
         run: |
           mkdir -p .isolation/runtime
           node -p "JSON.stringify({node:process.versions.node,sqlite:process.versions.sqlite,platform:process.platform,arch:process.arch})" | tee .isolation/runtime/node.json
-      # The published engine range remains 22 until all six certification jobs pass.
-      # Every semantic test, corpus and refusal still runs on both majors.
-      - name: Current published engine gate
-        if: matrix.node == '22'
+      # Both majors were certified by all 31 jobs at 63a344e (run 38160707120).
+      # Enforce the published range and every semantic gate on both majors.
+      - name: Certified published engine gate
         working-directory: node
         run: npm run test:engine
       - name: Read and write conformance
