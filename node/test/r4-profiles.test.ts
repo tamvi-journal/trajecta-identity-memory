@@ -129,7 +129,11 @@ for (const failure of ["backup", "write", "replace", "close"])
       return true;
     }) as any;
     let writes = 0;
-    if (failure === "close") fs.closeSync = (fd) => { originalClose(fd); throw error; };
+    if (failure === "close")
+      fs.closeSync = (fd) => {
+        originalClose(fd);
+        throw error;
+      };
     else if (failure === "replace")
       fs.renameSync = () => {
         throw error;
