@@ -33,11 +33,6 @@ const rows = (path: string): any[] =>
     .map((line) => JSON.parse(line));
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
-test("conformance runs on the pinned Node major with node:sqlite", () => {
-  assert.equal(process.versions.node.split(".")[0], "22");
-  assert.match(process.versions.sqlite ?? "", /^3\./u);
-});
-
 test("golden manifest authenticates every corpus artifact and normalization table", () => {
   const manifest = JSON.parse(readFileSync(resolve(GOLDEN, "MANIFEST.json"), "utf8"));
   assert.equal(manifest.schema, "trajecta.golden-manifest/v1");

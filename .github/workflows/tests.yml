@@ -11,8 +11,24 @@ env:
   TRAJECTA_IDENTITY_PROFILES: ${{ github.workspace }}/.isolation/identity-profiles
 
 jobs:
+  r4-corpus-audit:
+    name: R4 exact corpus and archive provenance audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Verify every unchanged payload and every permitted digest
+        run: |
+          mkdir -p .isolation
+          python tools/r4/audit.py > .isolation/r4-audit.json
+          diff -u docs/r4-corpus-audit.json .isolation/r4-audit.json
+
   r3-cross-runtime:
-    name: ${{ matrix.os }} / R3 X and synthetic M
+    name: ${{ matrix.os }} / node${{ matrix.node }} / R3 X and synthetic M
     runs-on: ${{ matrix.os }}
     # Windows reached 15m after the fixed matrix and crashes, during mandatory concurrency.
     # Extend only the runner failure bound; every plan, seed and serial proof remains required.
@@ -21,6 +37,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ["22", "24"]
     env:
       TMPDIR: ${{ github.workspace }}/.isolation/tmp
       TMP: ${{ github.workspace }}/.isolation/tmp
@@ -32,7 +49,7 @@ jobs:
           python-version: "3.11"
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: ${{ matrix.node }}
       - name: Prepare isolated roots and reports
         run: python -c "from pathlib import Path; Path('.isolation/tmp').mkdir(parents=True, exist_ok=True); Path('.isolation/r3-reports').mkdir(parents=True, exist_ok=True)"
       - name: Install test helpers
@@ -57,11 +74,11 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: r3-x-${{ matrix.os }}
+          name: r3-x-${{ matrix.os }}-node${{ matrix.node }}
           path: .isolation/r3-reports
 
   r3-differential:
-    name: ${{ matrix.os }} / R3 Z 2000 MCP 2000 CLI 5000 kernel
+    name: ${{ matrix.os }} / node${{ matrix.node }} / R3 Z 2000 MCP 2000 CLI 5000 kernel
     runs-on: ${{ matrix.os }}
     # Windows exhausted the former wall-clock bound before finishing its fixed budgets.
     # Every case remains mandatory; this is only the job's failure timeout (§3.2).
@@ -70,6 +87,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ["22", "24"]
     env:
       TMPDIR: ${{ github.workspace }}/.isolation/tmp
       TMP: ${{ github.workspace }}/.isolation/tmp
@@ -81,7 +99,7 @@ jobs:
           python-version: "3.11"
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: ${{ matrix.node }}
       - name: Prepare isolated roots and reports
         run: python -c "from pathlib import Path; Path('.isolation/tmp').mkdir(parents=True, exist_ok=True); Path('.isolation/r3-reports').mkdir(parents=True, exist_ok=True)"
       - name: Every fixed-budget case and transport smokes
@@ -89,24 +107,47 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: r3-z-${{ matrix.os }}
+          name: r3-z-${{ matrix.os }}-node${{ matrix.node }}
           path: .isolation/r3-reports
 
   node-conformance:
-    name: ${{ matrix.os }} / node22 / read and write conformance
+    name: ${{ matrix.os }} / node${{ matrix.node }} / read and write conformance
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ["22", "24"]
+    env:
+      TMPDIR: ${{ github.workspace }}/.isolation/tmp
+      TMP: ${{ github.workspace }}/.isolation/tmp
+      TEMP: ${{ github.workspace }}/.isolation/tmp
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: ${{ matrix.node }}
+      - name: Prepare isolated temporary root
+        run: node -e "require('node:fs').mkdirSync('.isolation/tmp', {recursive:true})"
+      - name: Record bundled SQLite version
+        shell: bash
+        run: |
+          mkdir -p .isolation/runtime
+          node -p "JSON.stringify({node:process.versions.node,sqlite:process.versions.sqlite,platform:process.platform,arch:process.arch})" | tee .isolation/runtime/node.json
+      # The published engine range remains 22 until all six certification jobs pass.
+      # Every semantic test, corpus and refusal still runs on both majors.
+      - name: Current published engine gate
+        if: matrix.node == '22'
+        working-directory: node
+        run: npm run test:engine
       - name: Read and write conformance
         working-directory: node
-        run: npm test
+        run: npm run test:matrix
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: node-runtime-${{ matrix.os }}-node${{ matrix.node }}
+          path: .isolation/runtime
 
   test:
     name: ${{ matrix.os }} / py${{ matrix.python }}
@@ -138,7 +179,7 @@ jobs:
       - name: Build wheel
         run: python -m pip wheel . --no-deps -w dist
       - name: Installed wheel view from outside the checkout
-        run: python tools/check_installed_view.py dist/trajecta_identity_memory-0.4.0-py3-none-any.whl
+        run: python tools/check_installed_view.py --wheel-dir dist
 
   golden-corpus:
     name: ubuntu / py3.11 / golden corpus
