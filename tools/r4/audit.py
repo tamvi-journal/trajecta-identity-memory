@@ -21,6 +21,7 @@ ADDED = {"resolve-p25-" + mode for mode in (
     "migration-p26-missing-parent-chain", "migration-p26-concurrent-parent"}
 ARCHIVE_OLD = "trajecta_identity/migrate_aml.py"
 ARCHIVE_NEW = "tools/archive/migrate_aml.py"
+FROZEN_TABLES = {"tables/identity-v1.json", "tables/text-norm-v2.json", "tables/version-sensitive.json"}
 
 
 def sha(raw):
@@ -61,12 +62,22 @@ def compare(name, old, new, old_source, new_source, table_source):
                                 separators=(",", ":")) + "\n").encode("utf-8")
         assert raw == canonical, (name, "manifest byte format/order changed")
     assert left.keys() == right.keys(), (name, "manifest top-level keys")
+    old_files, new_files = set(left["files"]), set(right["files"])
+    removed_paths = {p for p in old if p.split("/")[0] in allowed_old}
+    added_paths = {p for p in new if p.split("/")[0] in allowed_new}
+    assert old_files - new_files == removed_paths, (name, "unapproved manifest file removals")
+    assert new_files - old_files == added_paths, (name, "unapproved manifest file additions")
+    # CLI has no external tables; the other five corpora freeze this exact list.
+    # Derive neither list from a MANIFEST that is itself being authenticated.
+    expected_tables = set() if name == "golden-cli-v1" else FROZEN_TABLES
+    old_tables = {p for p in old_files if p.startswith("tables/")}
+    new_tables = {p for p in new_files if p.startswith("tables/")}
+    assert old_tables == new_tables == expected_tables, (name, "frozen external table inventory changed")
     changes = []
     fields = [("files",), ("oracle_sources",)]
     # First authenticate both complete payload inventories, including external tables.
     for manifest, payload in ((left, old), (right, new)):
-        assert set(manifest["files"]) == (set(payload) - {"MANIFEST.json"}) | {
-            k for k in manifest["files"] if k.startswith("tables/")}
+        assert set(manifest["files"]) == (set(payload) - {"MANIFEST.json"}) | expected_tables
         for path, digest in manifest["files"].items():
             raw = table_source(path) if path.startswith("tables/") else payload[path]
             assert sha(raw) == digest, (name, "payload digest does not match", path)
