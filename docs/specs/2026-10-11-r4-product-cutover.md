@@ -1,6 +1,6 @@
 # R4: the Trajecta product layer, installer, and cutover
 
-Status: approved by Lam @ 8dae7e3; §12 added after Ty's product question (Lam settlement 2026-10-11), revised after Lam #41 @ f10c11a (F41-1..F41-3). Revised after Lam's review @ b121be5 (REQUEST CHANGES: F40-1..F40-4; Q1–Q8 yes with conditions; §11). Author: Aux (leader). Builds on R0–R3 and R2e (main @ efa5149).
+Status: approved by Lam @ 8dae7e3; §12 added after Ty's product question (Lam settlement 2026-10-11), revised after Lam #41 @ f10c11a (F41-1..F41-3) and @ 6cf5d29 (F41-4, F41-5). Revised after Lam's review @ b121be5 (REQUEST CHANGES: F40-1..F40-4; Q1–Q8 yes with conditions; §11). Author: Aux (leader). Builds on R0–R3 and R2e (main @ efa5149).
 
 ## 0. Goal, and what "done" means
 
@@ -210,6 +210,12 @@ It is **not** `npm pack`. npm publish is not used in R4.
 - A changed or unlisted file is kept and reported.
 - A directory is removed only if this install created it **and** it is empty.
 - Stores, profiles and client configs are never touched. The command prints where the data remains.
+- **One owner-authorized exception: `<root>/update-state.json` (Lam #41 F41-5; §12.2).** It is not in `owned.json`, so the rules above never remove it. Only a **full** uninstall may, and only when all of these hold:
+  - no version remains installed after this run's other removals have succeeded; if any removal failed or was refused, the state file is kept;
+  - the path is exactly `<root>/update-state.json`, a regular file (not a symlink), inside the `<root>` this installer owns;
+  - the owner types the confirmation on a TTY, after a warning that replay protection and the key-rotation chain reset. No TTY, `--yes`, or a mismatched answer keeps it;
+  - it is removed by a single unlink under the install lock. If the unlink fails, the file is intact and the failure is reported.
+  - `uninstall --version`, `--rollback` and `update` never remove or rewrite it, except `update` advancing it as §12.2 defines.
 
 ### 5.5 Upgrade from a Python install
 
@@ -289,10 +295,12 @@ Merge rule: unchanged. Lam approves the exact head, CI is green on that head, th
 - **Q7:** Should the installer only print a replacement for an old Python MCP config, never edit it? Aux: yes. Client configs belong to the owner (standing safety rule).
 - **Q8:** Should the product version be 0.5.0? Aux: yes. It sorts after everything a user has seen.
 - **Q9 — CONDITIONAL YES (Lam):** the Ed25519 key lives in a GitHub Actions `release` environment, **for the developer beta only**. The conditions:
-  - **Protected refs:** the environment accepts only signed release tags on `main`. Changes to the signing workflow need a reviewed PR, a CODEOWNERS rule naming Ty, and branch protection.
+  - **Protected trigger (Lam #41 F41-4):** the release workflow runs only by manual `workflow_dispatch`, and the `release` environment's deployment policy admits only the protected `main` branch. The first step refuses unless `github.ref` is `refs/heads/main` and the workflow file is the one on `main`. No PR, fork, tag or other ref can enter the environment. Changes to the release workflow need a reviewed PR, a CODEOWNERS rule naming Ty, and branch protection.
+  - **Dispatch inputs are digests, not trust:** the version, the artifact digest, the source commit on `main`, and the digests of the M8 receipt and both reviewer receipts (§12.1). The candidate tarball and the receipts sit on a **draft** release that has no tag yet. The job re-derives every digest itself from those assets and refuses on any mismatch.
+  - **Tags are created only after signing:** release tags `v*` are protected by a ruleset that lets only the release workflow create them, with no bypass for anyone else and no update or deletion. After the signer job finishes, a separate publish job (holding `contents: write` and no key) verifies the signature against the pinned public key, creates the tag on the recorded source commit, and publishes the draft. No tag exists without M8, both receipts, Ty's approval and a valid signature.
   - **Approval of an exact digest:** the signing job prints the candidate tarball's SHA-256 and the `release.json` bytes. Ty approves **that exact digest** in the environment prompt. The job re-checks the digest after approval and signs only that.
   - **No self-approval:** "prevent self-review" is enabled. No bypass for admins, where GitHub offers the setting.
-  - **Isolated signer:** a separate job with only `contents: read`, no checkout of PR code, and a pinned action SHA. The key is used through stdin to a short pinned script and never written to disk or logs.
+  - **Isolated signer:** a separate job with only `contents: read`, no checkout of PR code, and a pinned action SHA. It never creates tags or releases; the publish job does that. The key is used through stdin to a short pinned script and never written to disk or logs.
   - **Release receipt:** the run ID, approver, digest, signature and key fingerprint are recorded as a release asset and in the release evidence.
   - **Stated honestly:** approval gates access to the secret. It does not prove the workflow code is safe, or that the key never reaches the runner.
   - **Signing and release stay disabled until Ty approves this setup.**
@@ -331,6 +339,7 @@ Merge rule: unchanged. Lam approves the exact head, CI is green on that head, th
   - §5.4: uninstall removes owned, unchanged paths only.
 - **Q1–Q8:** yes, with Lam's conditions recorded inline. Q2 is for the developer beta only. Q3 holds after full 3-OS certification. Q4 holds after F40-1/F40-2. Q6 archives `import-aml` with its history kept. P25/P26 are explicit both-runtime oracle patches with audited corpus diffs (§7).
 - **#41 @ f10c11a (REQUEST CHANGES F41-1..F41-3):** F41-1, M8 receipt bound to the artifact digest, required before both reviewer receipts and Ty's approval, checked by the signing job (12.1). F41-2, shared monotonic `update-state.json` outside version directories, never decreased, fail-closed recovery, rotation chain kept across rollback (12.2). F41-3, exact verify → stage → inspect → switch-only-when-compatible order, and `migrate-to --using` as verified staged execution (12.2). §12 moved after §11.
+- **#41 @ 6cf5d29 (REQUEST CHANGES F41-4, F41-5):** F41-4, release by manual `workflow_dispatch` on protected `main` with digest inputs; the tag is created by a separate keyless publish job only after signing; Q9 and 12.1 item 7 agree. F41-5, an owner-authorized exception in §5.4 for `<root>/update-state.json` on full uninstall only. Nonblocking: `--reset-state` is described as a human trust reset, and M2 pins its boundary.
 
 ## 12. Release approval and updates (Ty's product question; Lam settlement 2026-10-11)
 
@@ -349,7 +358,7 @@ Ty's question: *what do real products do, and what makes future feature updates 
    Hashes may appear in it, but Ty is never asked to read or compare them.
 5. **Ty approves or rejects that named release.** The pending GitHub `release` environment run links to the note, because GitHub's native approval screen does not reliably show arbitrary digest text. Her click is the veto: no click, no release.
 6. **After approval, the signing job re-checks** the tarball digest, the key fingerprint, the M8 receipt, and both reviewer receipts, and that all three name exactly this artifact digest and candidate. A missing or mismatched receipt aborts the run before signing. Any change to the candidate voids the M8 receipt, both reviews and the approval; all must be redone.
-7. **The release tag** is created only by that signing job, so no tag exists without M8. Every other Q9 condition stays unchanged: protected tags and workflow, CODEOWNERS, no self-approval, an isolated signer, and a release receipt.
+7. **Trigger and tag (Lam #41 F41-4; §10 Q9).** Releasing starts with a manual `workflow_dispatch` on protected `main`, carrying the candidate's digests; Ty's approval gates the signer job inside the `release` environment; only after signing does the separate publish job create the protected release tag on the recorded source commit and publish the draft. So no tag exists without M8, both receipts, Ty's approval and a valid signature. Every other Q9 condition stays unchanged: protected workflow, CODEOWNERS, no self-approval, an isolated signer, and a release receipt.
 
 ### 12.2 `trajecta update`
 
@@ -360,10 +369,11 @@ Updates reuse the install machinery exactly: Phase A/B/C (§5.2), a versioned ro
   - The tarball's size and SHA-256 are verified, then the offline `MANIFEST.json`.
   - **Key rotation chains:** a new key is accepted only through a rotation statement signed by the currently trusted key and shipped inside a release that the current key signed. Accepted rotation statements are appended to the shared update state, so a version rollback never forgets a rotation: an older binary walks the persisted chain from its own embedded key and uses the newest key reached. A chain that does not verify from the embedded key fails closed.
 - **Freshness:** the signed latest index carries a **monotonic sequence number** and an **expiry**.
-  - **Shared update state (Lam #41 F41-2).** The high-water sequence and the rotation chain live in `<root>/update-state.json`, **outside every version directory**. It is not listed in `owned.json`, so neither `--rollback` nor `uninstall --version` touches it; only a full uninstall removes it, and only after a typed confirmation that warns that replay protection resets.
+  - **Shared update state (Lam #41 F41-2).** The high-water sequence and the rotation chain live in `<root>/update-state.json`, **outside every version directory**. It is not listed in `owned.json`, so neither `--rollback` nor `uninstall --version` touches it; only a full uninstall removes it, under the owner-authorized exception in §5.4.
   - It is written by temp file + fsync + atomic rename, under the install lock, and only **after** the new index has been verified and **before** any `current` switch. The sequence is **never decreased** by any command.
   - It carries its own SHA-256 line. A refused lower sequence (replay) or an expired index (freeze) changes nothing.
   - **Missing or corrupt state fails closed:** `update` refuses and prints the recovery: `trajecta update --reset-state` on a TTY with a typed confirmation, which rebuilds the state only from a freshly verified index whose sequence is at least the highest one recorded in the installed versions' `MANIFEST.json` files (each release's `MANIFEST.json` records the index sequence that published it). There is no silent re-creation.
+  - **Stated honestly:** `--reset-state` is an explicit **human trust reset**. It cannot reconstruct a higher sequence the machine once saw but never installed, so after a reset the high-water mark can be lower than before, and a replay of an index between the two is possible until a newer index is accepted. The confirmation text says so. Outside this command and the full-uninstall exception, the high-water mark never decreases.
   - Full TUF-style protection is **deferred**, as an explicit developer-beta risk decision. The README discloses it.
 - **Exact order (Lam #41 F41-3).** No step writes a store. No step switches `current` while the target is incompatible with the current stores.
   1. **Verify:** signed index (trust and freshness above), then tarball size, SHA-256 and `MANIFEST.json`.
@@ -392,9 +402,11 @@ Updates reuse the install machinery exactly: Phase A/B/C (§5.2), a versioned ro
 
 ### 12.3 Gates added
 
-- **M2:** signed metadata (valid, tampered, wrong key, rotated key with chain, rotated key without chain, rotation remembered after `--rollback`); sequence replay and expiry; replay attempted after `--rollback`, after `uninstall --version` + reinstall, and after a crash at each update-state write; missing and corrupt update state fail closed; downgrade and same-version refusal; compatibility preflight refusal; TTY-only `migrate-to` after an update.
+- **M2:** signed metadata (valid, tampered, wrong key, rotated key with chain, rotated key without chain, rotation remembered after `--rollback`); sequence replay and expiry; replay attempted after `--rollback`, after `uninstall --version` + reinstall, and after a crash at each update-state write; missing and corrupt update state fail closed; `--reset-state` sets the floor from installed MANIFESTs exactly, and the test pins that an index between that floor and the previously seen higher sequence is accepted only after the typed reset, never without it; downgrade and same-version refusal; compatibility preflight refusal; TTY-only `migrate-to` after an update.
 - **M3:** crashes at every Phase A/B/C boundary during an update, and around the update-state write; the exact order in 12.2, asserting that `current` never names an incompatible version; `migrate-to --using` from a staged target, a migration failure, and a crash between migration and switch followed by a converging re-run; re-run convergence; rollback, and its refusal after a migration.
 - **M5:** the plugin wrapper keeps working across an update without a rebuild.
+- **M3 (uninstall, F41-5):** `update-state.json` survives `uninstall --version`, `--rollback`, a refused or non-TTY full uninstall, a full uninstall where another removal failed, and a symlink at that path; it is removed only by a confirmed full uninstall with no version left.
+- **Release workflow (F41-4), checked before Ty's Q9 consent:** a dispatch from any ref other than `main`, a mismatched digest input, a missing receipt, or a tag created outside the workflow are each refused, run in a dry-run repository without the key.
 - **M7:** the old Python reader still reads stores written by the updated version.
 - **M8:** Ty's real-copy rehearsal, run on the release candidate by digest, producing the M8 receipt (12.1). The signing job refuses without it.
 
