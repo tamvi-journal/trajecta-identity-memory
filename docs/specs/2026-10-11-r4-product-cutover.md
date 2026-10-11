@@ -43,7 +43,7 @@ Both engines have **zero npm dependencies**: no `dependencies` and no `devDepend
   - the explicit list of runtime paths to copy (identity: `src`, `schema.sql`, `tables`, `assets`, `package.json`; work: `src`, `assets`, `package.json`);
   - the SHA-256 of every copied file.
 - `tools/build-release.ts` fetches each pinned SHA, copies exactly those paths into `engines/identity/` and `engines/work/`, and **fails** if any file's SHA-256 differs from the lock. The lock is regenerated only by an explicit `tools/pin-engines.ts <sha>`, and that change is reviewed like code.
-- The product imports engines only through relative paths (`../engines/identity/src/index.ts`). There is no package-name resolution.
+- The product imports engines only through relative paths. From `product/src/engines.ts` that is `../../engines/identity/src/index.ts`. There is no package-name resolution, and M2's offline run proves the paths resolve.
 
 ### 2.2 The release artifact is one deterministic tarball
 
@@ -61,11 +61,24 @@ It is **not** `npm pack`. npm publish is not used in R4.
 
 - The product owns the only `trajecta` command.
 - The work engine's own `trajecta` and `trajecta-work-mcp` bins are **not** exposed by the product, so there is no collision. Its CLI is reached as `trajecta work …` and its MCP server through the plugin. The work repo is unchanged.
-- **Pass-through contract:** `trajecta identity …` and `trajecta work …` spawn the engine CLI as a child process with:
+- **Pass-through contract (Lam R4-F7):** `trajecta identity …` and `trajecta work …` spawn the engine CLI as a child process with:
   - the exact argv;
-  - stdin piped byte for byte;
-  - the same cwd and environment.
-- They return the child's stdout and stderr bytes and its exit code unchanged. M2 proves this over the whole cli-v1 corpus, error cases included, plus the work CLI suite.
+  - the same cwd and environment;
+  - **`stdio: "inherit"` for all three streams.**
+- The child therefore writes to the **same file descriptors** the user's shell gave the product:
+  - the bytes are exact by construction;
+  - `isatty()` is unchanged per stream, so a real terminal stays a terminal and a pipe stays a pipe;
+  - the TTY-only owner confirmations (`migrate-to`, receipts) behave exactly as when the engine is called directly, including their refusal when there is no TTY.
+- The product never captures, buffers or re-encodes engine streams.
+- **Exit and signals:**
+  - The product exits with the child's exit code.
+  - If a signal killed the child, the product removes its own handler and re-raises that signal on itself (POSIX). On Windows it exits with the child's code.
+  - SIGINT and SIGTERM sent to the product while the child runs are forwarded to the child, never handled by the product.
+- **M2 proves:**
+  - non-interactive: the full cli-v1 corpus and the work CLI suite, with byte-exact stdout and stderr and exact exit codes;
+  - interactive, on POSIX: a PTY test using `script(1)` on macOS and Linux, covering a `migrate-to` confirmation that is accepted and one that is typed wrong, an `isatty` probe, and Ctrl-C propagation;
+  - no TTY: the engine's refusal, with its bytes and exit code unchanged;
+  - Windows interactive confirmation is checked by hand inside M8, because hosted runners have no console. Windows non-TTY refusal stays automated.
 
 ### 2.4 Authority: the product never writes a store itself (F40-4)
 
@@ -102,9 +115,20 @@ It is **not** `npm pack`. npm publish is not used in R4.
   - `trajecta-<ver>.tar.gz`;
   - `release.json`, which holds the version, the tarball's SHA-256 and size, and the engine SHAs;
   - `release.json.sig`, an **Ed25519** signature over the exact bytes of `release.json`.
-- The **Ed25519 public key is embedded** in `install.sh` and `install.ps1` and published in the product README. A checksum alone only proves consistency; the signature proves the release came from the key holder.
-- The signing key is a GitHub Actions secret, usable only from the `release` environment, which requires the owner's manual approval (Q9). The key never leaves that environment.
-- Rotating the key needs a new script release that is signed by the old key.
+- **Key and signature encoding (Lam R4-F5):**
+  - The public key is **SPKI DER, base64**, embedded in the installer. It is loaded with `crypto.createPublicKey({key, format: "der", type: "spki"})`.
+  - `release.json.sig` is the **raw 64-byte Ed25519 signature, base64**, on one line.
+  - Verification is **`crypto.verify(null, releaseJsonBytes, publicKey, signatureBytes)`**, where `releaseJsonBytes` are the exact downloaded bytes, never re-serialized.
+  - Tests on Node 22 and 24, on all 3 OSes, cover: a valid signature, a single flipped byte in `release.json`, a wrong key, a truncated signature, and non-base64 input. Each must give the expected result.
+- **Bootstrap trust:** the installer and the key must not come only from the same mutable channel as the tarball.
+  - The installer scripts are **never fetched and piped** (`curl | sh`). The documented bootstrap is: download `install.sh` or `install.ps1`, **check its SHA-256** against the value published out of band, then run it.
+  - The script SHA-256s and the key fingerprint (the SHA-256 of the SPKI DER) are published in **three independent places**:
+    - the product README at the signed release tag;
+    - the Tam Vị Journal release page;
+    - the beta purchase email.
+  - An attacker would have to change all three.
+  - The README states the honest limit: for the developer beta, trust rests on that out-of-band hash match plus TLS to GitHub. It is not a full supply-chain guarantee.
+- **Key rotation** needs a new installer whose new hash is published in the same three places, together with a statement signed by the old key.
 
 ### 5.2 Steps, and the transaction boundary
 
@@ -113,17 +137,29 @@ It is **not** `npm pack`. npm publish is not used in R4.
 **Phase A: verify and stage.** Nothing visible to the user changes in this phase. A failure here deletes only the staging directory this run created.
 1. **Probe Node.** Look on PATH, then in known locations (Homebrew, nvm/fnm/volta shims, `%ProgramFiles%\nodejs`), version-probing each candidate against the supported set. If none passes, write `trajecta: need Node 22.19+ or 24 LTS` to stderr, exit 1, and change nothing.
 2. **Verify the release.** Check `release.json.sig` with the embedded key, using an **inline** verifier run by the probed Node (`node -e`, with `crypto.verify('ed25519')`). Then check the tarball's SHA-256 and size against `release.json`. Any mismatch → exit 1.
-3. **Extract** with the system `tar` (macOS/Linux, and `tar.exe` on Windows 10+) into `<root>/.staging-<ver>-<random>/`.
-   - Refuse any entry that is absolute, contains `..`, is a symlink, or is a hardlink.
-   - Check every extracted file against `MANIFEST.json` (path set and SHA-256).
+3. **Inspect, then extract (Lam R4-F5).** The system `tar` is not used.
+   - The release also ships `trajecta-extract.mjs`, a small dependency-free extractor. Its SHA-256 is inside the signed `release.json`, and it is checked before it runs.
+   - **Pass 1, metadata only:** it reads every gzip/ustar header (PAX `x` records are allowed only for `path`) and rejects the whole archive, before writing any byte, if any entry:
+     - has a type other than a regular file (`0`) or a directory (`5`), which rules out symlinks, hardlinks, devices, FIFOs and GNU long names;
+     - is a duplicate path, including case-insensitive duplicates;
+     - has an absolute path, a `..` segment, a backslash or a drive letter;
+     - contains `:` (NTFS alternate streams), a trailing dot or space, or a reserved DOS name (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`, with or without an extension);
+     - is outside `trajecta-<ver>/`;
+     - has a size that disagrees with `MANIFEST.json`.
+   - **Pass 2:** it writes the files itself into `<root>/.staging-<ver>-<random>/` with mode 0644 or 0755 and no ownership changes. Then it checks every file against `MANIFEST.json` (the path set and SHA-256).
 4. **Run the real entrypoint:** `node <staging>/trajecta-<ver>/product/src/cli.ts install --staged <staging>`.
 5. **Run `doctor` from staging, read-only**, against the existing stores if any. A failing doctor stops the install here.
 
-**Phase B: commit.** This is the only switch point.
+**Phase B: commit.** This is the only switch point. Lam R4-F6 applies to this phase.
 
+0. **Lock.** Every installer or uninstaller run first takes `<root>/.lock` by exclusive create (`O_EXCL` or `wx`), recording its pid and start time. A second run refuses with `trajecta: another install is running (pid N)`. A lock whose pid is gone is broken with a printed notice.
 6. **Rename** `<staging>/trajecta-<ver>` to `<root>/<ver>`, on the same volume. If `<root>/<ver>` already exists and its `MANIFEST.json` digest matches, reuse it. If it exists with a different digest → exit 1.
-7. **Write `<root>/<ver>/.installed.json`.** It lists every path this install owns, with its SHA-256, including the launcher and plugin paths written in Phase C.
-8. **Update the pointer atomically (§5.3).** The previous version is appended to `<root>/history.json` for rollback.
+7. **Plan.** Write `<root>/<ver>/.planned.json`, listing every path the install *will* create, with its **expected** SHA-256. The launchers, wrappers and plugin are deterministic given the install root (K3), so their bytes are precomputed. A plan grants **no** ownership.
+8. **Update the pointer atomically (§5.3).** `current` holds **both** the new version (line 1) and the previous version (line 2), so a single rename switches the version and records the rollback target together. No second file can disagree with it.
+
+**Ownership ledger.** `<root>/owned.json` lists the paths the product **verifiably** created. Each entry records the path, its SHA-256, and whether it is per-version or `shared` (the user-bin launcher and the wrappers in `<root>/bin`).
+- An entry is added only **after** its effect is complete and its bytes are re-read and match the plan. Each update is a tmp file plus rename.
+- A crash between an effect and its ledger entry leaves an unowned file. The next run compares that file to the plan: if the bytes match, it adopts it; otherwise it leaves the file and reports it.
 
 **Phase C: post-commit, idempotent.** Running `trajecta install` again resumes here.
 
@@ -132,16 +168,20 @@ It is **not** `npm pack`. npm publish is not used in R4.
 11. **Store bootstrap,** only for a store that does not exist yet.
     - A bootstrapped empty store is a **valid state**. It is not rolled back: a later failure leaves it, and the next install or `doctor` reports it.
     - An existing store is never modified by install. Migration happens only through `migrate-to`, with a TTY confirmation.
-12. **`doctor`.** A failure here exits non-zero. The new version stays committed, so the user can run `trajecta install --rollback` to restore the pointer from `history.json`.
+12. **`doctor`.** A failure here exits non-zero. The new version stays committed, so the user can run `trajecta install --rollback`.
+
+**Rollback.** `--rollback` swaps the two lines of `current` with one rename. It is allowed only if line 2 names a version directory whose `MANIFEST.json` still verifies. The swap is its own inverse, so rollback is always possible after any committed switch whose previous version is intact. Uninstall never removes the version named on line 2 while line 1 points elsewhere.
 
 **Re-entry invariants:**
 - A run interrupted in Phase A leaves at most a `.staging-*` directory, which the next run removes.
 - After step 8, the system runs either the old version or the new one, never a mix.
-- Phase C steps are idempotent.
+- Phase C steps are idempotent, and each one is ledgered when it completes.
+- **Crash tests (M3)** kill the process: after the rename; after `.planned.json`; on each side of the `current` rename; and between each Phase C effect and its ledger entry. A re-run must converge, and `--rollback` must work from every committed state.
 
 ### 5.3 The pointer, launchers and the MCP bootstrap wrapper (one design for all OSes)
 
-- **Pointer:** `<root>/current` is a **text file** holding only the version string. It is not a symlink and not a directory.
+- **Pointer:** `<root>/current` is a **text file** with two lines: the current version, then the previous version (or an empty line). It is not a symlink and not a directory.
+  - Launchers read only line 1: `read -r` in sh, `set /p` in cmd.
   - Updates write `current.tmp`, flush it, then `rename` it over `current`. That is `MoveFileExW` with replace-existing on Windows, which is atomic on the same NTFS volume, and POSIX `rename(2)` elsewhere.
 - **Node path:** `<root>/node` is a text file holding the absolute path of the Node binary probed at install time.
 - **Launchers** are **OS-native**, so they run even when Node is gone:
@@ -153,7 +193,8 @@ It is **not** `npm pack`. npm publish is not used in R4.
 
 ### 5.4 Uninstall
 
-- `trajecta uninstall` removes **only paths listed in `.installed.json` whose current SHA-256 still matches**.
+- `trajecta uninstall` removes **only paths in `owned.json` whose current SHA-256 still matches**.
+- **Shared paths** (the user-bin launcher and `<root>/bin` wrappers) are removed only by a **full** uninstall, and only when no version remains installed. `trajecta uninstall --version <old>` never touches them, even when their hashes match (Lam R4-F6).
 - A changed or unlisted file is kept and reported.
 - A directory is removed only if this install created it **and** it is empty.
 - Stores, profiles and client configs are never touched. The command prints where the data remains.
@@ -235,9 +276,32 @@ Merge rule: unchanged. Lam approves the exact head, CI is green on that head, th
 - **Q6:** Should `import-aml` be archived rather than ported? Aux: yes.
 - **Q7:** Should the installer only print a replacement for an old Python MCP config, never edit it? Aux: yes. Client configs belong to the owner (standing safety rule).
 - **Q8:** Should the product version be 0.5.0? Aux: yes. It sorts after everything a user has seen.
-- **Q9 (new, F40-2):** Should the Ed25519 release key be a GitHub Actions secret, usable only from the `release` environment with Ty's manual approval? The alternative is an offline key that Ty holds and uses with a one-command signing tool. Aux: the Actions secret with owner approval. Ty is non-technical, and environment approval gives her a real veto without key handling.
+- **Q9 — CONDITIONAL YES (Lam):** the Ed25519 key lives in a GitHub Actions `release` environment, **for the developer beta only**. The conditions:
+  - **Protected refs:** the environment accepts only signed release tags on `main`. Changes to the signing workflow need a reviewed PR, a CODEOWNERS rule naming Ty, and branch protection.
+  - **Approval of an exact digest:** the signing job prints the candidate tarball's SHA-256 and the `release.json` bytes. Ty approves **that exact digest** in the environment prompt. The job re-checks the digest after approval and signs only that.
+  - **No self-approval:** "prevent self-review" is enabled. No bypass for admins, where GitHub offers the setting.
+  - **Isolated signer:** a separate job with only `contents: read`, no checkout of PR code, and a pinned action SHA. The key is used through stdin to a short pinned script and never written to disk or logs.
+  - **Release receipt:** the run ID, approver, digest, signature and key fingerprint are recorded as a release asset and in the release evidence.
+  - **Stated honestly:** approval gates access to the secret. It does not prove the workflow code is safe, or that the key never reaches the runner.
+  - **Signing and release stay disabled until Ty approves this setup.**
 
-## 11. Lam's review @ b121be5, and how it was applied
+## 11. Lam's reviews, and how they were applied
+
+### @ 90be1e1 (R4-F5..F7, Q9)
+- **F5:**
+  - `crypto.verify(null, …)` with an SPKI-DER key and a raw base64 signature, with positive and negative tests on Node 22 and 24 (§5.1).
+  - Out-of-band hash pinning of the installer and key fingerprint in three channels, no `curl | sh`, and an honest statement of the trust limit (§5.1).
+  - A signed pre-inspecting extractor that refuses special, duplicate, traversal and Windows-alias entries before writing (§5.2 step 3).
+- **F6:**
+  - Planned and verified ownership are separate (`.planned.json` vs `owned.json`, ledgered after each effect).
+  - `current` carries both lines, so one rename covers the switch and the rollback record.
+  - Lock file; crash tests at every boundary; rollback always possible; shared launchers protected from a partial uninstall (§5.2–§5.4).
+- **F7:** pass-through uses inherited stdio, so the bytes are exact by construction and `isatty` is preserved; signals are forwarded or re-raised; PTY acceptance on POSIX, with the Windows interactive check in M8 (§2.3).
+- **Q9:** conditional yes, with every condition recorded (§10).
+- **Nit:** `../../engines/` (§2.1).
+- **Head note:** c463c4e (the P25/P26 detail) is folded into this head and needs the same exact-head settlement.
+
+### @ b121be5
 
 - **F40-1 (package):** §2.1–§2.3. Both engines have zero dependencies, so they are vendored by exact SHA with per-file digests. The release is a deterministic tarball with a `MANIFEST.json`, not `npm pack`. The bin collision is resolved. Offline unpack-and-run acceptance is in M2.
 - **F40-2 (install):** §5.1 and §5.2. There is a signed `release.json` with an embedded Ed25519 key, and the flow is verify → stage → file-verify → real entrypoint → read-only doctor → rename → owned-paths manifest → atomic pointer. The failure and re-entry invariants are explicit for each phase. The no-Node case is proven isolated in M3.
