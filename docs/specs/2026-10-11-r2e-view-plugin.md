@@ -1,6 +1,6 @@
 # R2e: TypeScript view, plugin contract, and the product surface
 
-Status: draft for Lam's review. Author: Aux (leader). Builds on R0, R2c, R2d and R3 (main @ 1fd960d).
+Status: architecture approved by Lam @ 566b8a3 (Q1–Q5 yes, with amendments F1–F8 applied; §10). Author: Aux (leader). Builds on R0, R2c, R2d and R3 (main @ 1fd960d).
 
 ## 0. Goal, scope, and why this phase matters for the product
 
@@ -41,33 +41,45 @@ R2e does **not** redesign the page. The redesign is proposed as R5 (§6) and is 
 | V9 | An exception in a handler returns 500 with `str(error)` as `text/plain`. Methods other than GET get `BaseHTTPRequestHandler`'s 501 HTML page | see G16 (§4) |
 | V10 | `serve()` prints `Identity memory view for <agent>: <url>  (Ctrl+C to stop)` to stdout, then opens the browser unless `--no-browser`. Ctrl+C closes the server and exits 0 | — |
 | V11 | The server is `ThreadingHTTPServer`, and the store opens a connection per operation | concurrent page requests are safe as reads |
+| V12 | `::1` passes the V1 check, but `ThreadingHTTPServer` is IPv4-only, so the bind fails with `socket.gaierror` (verified at 1fd960d). The printed URL would also lack brackets | `::1` is accepted on paper and broken in practice; fixed by P21 step 0 |
 
 ## 2. Oracle patch (both runtimes)
 
 ### 2.1 P21: the view answers only its own origin
 
-Every request is checked before routing, in this order:
+**Step 0, bind (fixes V12; F4).** Binding to `::1` uses an IPv6 socket in both runtimes. The printed and opened URL is `http://[::1]:<port>/`. `<port>` everywhere below is the **actually bound** port, so `--port 0` works.
 
-1. **Host.** The `Host` header must equal one of the names below, compared case-insensitively. Otherwise the response is 403, `text/plain; charset=utf-8`, with the body `forbidden host`.
-   - `127.0.0.1:<port>`
-   - `localhost:<port>`
-   - `[::1]:<port>`, accepted only when the server is bound to `::1`.
-2. **Origin.** If an `Origin` header is present, it must equal `http://` followed by an accepted Host value. Otherwise the response is 403 with the body `forbidden origin`. A missing `Origin` is allowed: direct navigation and same-origin GET requests often send none.
-3. **Framing.** Every response, including the 403 and 404 responses, also carries `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer`.
+Every request, of **every method**, is then checked before routing, in this order. Every check fails closed.
+
+1. **Host.** There must be exactly one `Host` header, and its value must equal one of the names below, compared ASCII-case-insensitively. A missing Host, a duplicate Host, a malformed authority, or a wrong port gets 403, `text/plain; charset=utf-8`, with the body `forbidden host`.
+   - `127.0.0.1:<port>` and `localhost:<port>`, when bound to `127.0.0.1` or `localhost`;
+   - `[::1]:<port>` and `localhost:<port>`, when bound to `::1`.
+2. **Origin (F1, F2).** A missing `Origin` is allowed: direct navigation and same-origin GET requests often send none, and step 1 already blocks rebinding. If Origin is present, there must be exactly one, and it must equal `http://` followed by **this request's own validated Host value**, compared ASCII-case-insensitively. Anything else gets 403 with the body `forbidden origin`, including a duplicate Origin, `Origin: null`, the `https` scheme, another accepted host name, or another port.
+3. **Response policy (F3).** Every response, including 403, 404, 500 and any non-GET response (G16), goes through one common header path. That path adds `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer` to the V8 headers. No route or method may bypass it.
 
 The checks are identical in both runtimes, including the 403 bodies. The page fetches relative URLs (`api/snapshot`), so P21 changes nothing for a legitimate viewer.
 
-Tests (both runtimes), each against a running server:
+**What P21 is and is not (Lam).** P21 closes the browser-based DNS-rebinding exposure. It is **not** authentication against other processes on the same machine. Those can still read the store file directly, and that is outside this spec.
+
+Tests (both runtimes), each against a server on an ephemeral port (`--port 0`), using the bound port:
 - `Host: evil.example:<port>` → 403 `forbidden host`.
 - `Host: 127.0.0.1:<other port>` → 403.
-- `Origin: http://evil.example` with a valid Host → 403 `forbidden origin`.
-- No Origin with a valid Host → 200.
-- After the rejected requests, the store file bytes and `mtime` are unchanged.
+- No Host, a duplicate Host, and a malformed Host (`127.0.0.1:`, `127.0.0.1:abc`, `[::1`) → 403.
+- `Origin: http://evil.example`, `Origin: null`, `Origin: https://127.0.0.1:<port>`, `Origin: http://127.0.0.1:<other port>`, a duplicate Origin, and an Origin for `localhost` when the request's Host is `127.0.0.1` → 403 `forbidden origin`.
+- No Origin with a valid Host → 200. A matching Origin → 200.
+- `POST` and `DELETE` to `/api/snapshot` with a bad Host → 403. With a good Host, they still carry the step 3 headers and get status ≥ 400.
+- An IPv6 run bound to `::1` → 200 at `http://[::1]:<port>/`. The printed URL has brackets. This test is skipped only on a runner without IPv6 loopback, and the skip is reported.
+- After every rejected request, the store file bytes and `mtime` are unchanged.
 
 ### 2.2 A: one page, served by both runtimes
 
-- `PAGE` moves, byte for byte, to `assets/view/index.html`. `view.py` reads it once at import (Python package data). `node/src/view.ts` reads the same file once at start.
-- Neither runtime embeds a copy of the page. A test proves that the bytes served at `/` equal the file's bytes in both runtimes.
+- `PAGE` moves, byte for byte, to `trajecta_identity/assets/view.html`. That is the one canonical file. It is added to `[tool.setuptools.package-data]`, and `view.py` reads it once at import through `importlib.resources`.
+- Node gets `node/assets/view.html`, a byte-identical copy, added to the `files` list in `node/package.json`. `node/src/view.ts` resolves it relative to its own module URL, never the working directory. This follows the existing `schema.sql` precedent: a conformance test fails if the two files' bytes or SHA-256 differ.
+- Neither runtime embeds the page in code. A test proves that the bytes served at `/` equal the canonical file's bytes in both runtimes.
+- **Installed-distribution test (F5).** Development tests are not enough.
+  - Python: CI builds a wheel, installs it into a fresh venv, and runs `view` from a working directory outside the checkout.
+  - Node: CI runs `npm pack`, unpacks the tarball into a temporary directory, and runs `view` from outside the checkout.
+  - In both cases, `GET /` must return the canonical bytes.
 - **Why this matters for the product:** after A, redesigning the screen means editing one HTML file against a frozen JSON API (§3.1). That is a design task Ty can own, and it needs no port and no conformance cycle in two runtimes.
 
 ## 3. V: the TypeScript view
@@ -93,8 +105,9 @@ Python generates the corpus. TS must match it byte for byte.
   - a 2001-code-point cue made of astral characters;
   - a percent-encoded cue, and a cue with `+`;
   - a cue that appears twice (`?cue=a&cue=b` takes the first);
-  - one cue that recalls something, and one that recalls nothing.
-- **Read purity:** after every request, the store file's bytes are identical to before. A read must not even refresh the header bytes that §3.5b of R3 allows writers to change.
+  - one cue that recalls something, and one that recalls nothing;
+  - **(F7)** malformed percent encoding (`%`, `%G1`, `%E2%82`) and percent-encoded invalid UTF-8 (`%FF`, `%C0%AF`, `%ED%A0%80`). Python's `parse_qs` decodes with `errors="replace"`. TS must produce the same decoded cue, with the same U+FFFD replacements, and must not use a URL parser that throws or decodes differently.
+- **Read purity (F6):** on an initialized store (`ready` or `legacy-v4`), every request leaves the store file's bytes identical to before. A read must not even refresh the header bytes that R3 §3.5b allows writers to change. The **only** exception is G15, which is a documented legacy path with its own separate test (§4). Read purity never covers it.
 - **Cross-runtime:** the Python view serves a store written by TS, and the TS view serves a store written by Python, through the R3 X harness. The responses equal those on a single-runtime store.
 - **OS matrix:** the same three OSes as R3.
 
@@ -102,8 +115,8 @@ Python generates the corpus. TS must match it byte for byte.
 
 | Gap | What it is | Decided in |
 |---|---|---|
-| G15 | `snapshot()` bootstraps an `uninitialized` store (V6). The branch is only reachable if the store disappears while serving. Both runtimes keep it. A corpus case pins it | R5: a read surface should show an empty state, not write |
-| G16 | A non-GET method gets a 4xx/5xx response whose body and status are not a contract. Both runtimes must answer with a status of 400 or above and write nothing. A test proves no store change | R5 |
+| G15 | `snapshot()` bootstraps an `uninitialized` store (V6). The branch is only reachable if the store disappears while serving. Both runtimes keep it. It is an **explicit exception to read purity** (§3.3), pinned by its own corpus case: delete the store while serving, request `/api/snapshot`, and compare the resulting store with a Python bootstrap | R5: a read surface should show an empty state, not write |
+| G16 | A non-GET method gets a response whose body and exact status are not a contract. Both runtimes must answer with a status of 400 or above, pass the P21 guard and response policy first (§2.1), and write nothing. A test proves no store change | R5 |
 
 ## 5. K: the plugin contract now, the builder at R4 (Q2)
 
@@ -114,9 +127,9 @@ Today `plugin` packs the **Python** sources into the `.plugin` file, together wi
 - **K3 reproducible:** with the same inputs, two builds produce the same entry list, the same entry bytes, a fixed timestamp, and modes 0755 for launchers and 0644 otherwise. The archive bytes themselves are not a contract, because they depend on the zlib version.
 - **K4 env defaults:** an environment value the user already set wins over the plugin's default. `~/` and `$HOME/` in a default stay expandable.
 - **K5 launcher failure:** when no suitable runtime is found, the launcher prints `<server>: need …` to stderr and exits 1. It never starts a half-working server.
-- **K6 version honesty:** `plugin.json` carries the single product version. Today it reads pyproject's 0.4.0. **R4 decides** the single source, and K6 becomes an exact test then.
+- **K6 version honesty:** `plugin.json` carries the single product version. Today it reads pyproject's 0.4.0. **R4 decides** the single source.
 
-Python's existing `test_plugin.py` is extended to cover K1–K5, so the contract is checked against the oracle from today.
+K1–K5 are **executable now**: Python's `test_plugin.py` is extended to cover them, so the contract is checked against the oracle from today. K6 is **declared now and accepted at R4 (F8)**. R2e ships no test for it, because the value it would pin is not settled yet.
 
 ## 6. R5 (proposed, not settled here): the view as the product screen
 
@@ -126,10 +139,21 @@ This section only records direction, so that R2e's API freeze (§3.1) does not b
 - **Identity and work on one screen:** batons, checkpoints and decisions from trajecta-work-memory, next to the identity timeline. This needs a view-api/v2 and is decided in R5.
 - **Owner:** Ty designs the page against the frozen API. Aux and Codex make sure both runtimes serve it.
 - G15 and G16 are resolved there.
+- **Product layer (Lam's settlement, recorded for R4).** Identity memory and work memory stay separate repos, each independently verified. At R4, Trajecta becomes a thin product composition layer over them. It owns the installer, dependency pinning, plugin distribution, the product version, licensing, release evidence and the compatibility matrix. There is no monorepo merge. The layer **coordinates the engines and is never a second authority over their memory histories**. It may compose identity and work evidence, but it must not manufacture verified continuity just because both engines returned data.
 
-## 7. Scope fence (anti-drift; proposed to Ty, applied to R2e if she agrees)
+## 7. Scope fence (anti-drift; Lam's wording, replacing Aux's draft)
 
-A new STOP reopens this spec only for data loss or corruption, a leak of memory contents, or an untyped error that a real client hits in normal use. Anything else becomes a frozen gap (G17+) with an owner phase. Purely visual or wording issues on the page are R5.
+New evidence reopens R2e only when it shows one of these:
+- data loss or corruption;
+- unauthorized information exposure;
+- a security-boundary failure;
+- a violation of an accepted invariant or a frozen API contract;
+- a cross-runtime conformance failure;
+- an operational defect that stops the supported product path from working.
+
+Non-contractual UX improvements, cosmetic issues, wording changes and feature requests become versioned deferred gaps (G17+), each with an owner phase. Purely visual issues on the page belong to R5.
+
+An accepted invariant cannot be reclassified as a deferred gap just to keep the phase on schedule.
 
 ## 8. CI and deliverables
 
@@ -145,3 +169,24 @@ A new STOP reopens this spec only for data loss or corruption, a leak of memory 
 - **Q3:** Should the page move to a shared asset (A) in R2e, even though it changes no behavior? Aux: yes. It is what makes R5 a design task instead of a port.
 - **Q4:** Should a missing `Origin` be accepted (§2.1 step 2)? Aux: yes, because browsers omit it on navigation and on many same-origin GETs, and Host already blocks rebinding.
 - **Q5:** Should G15 and G16 be frozen rather than fixed now? Aux: yes, under the scope fence. Neither loses or leaks data.
+
+## 10. Settlement (Lam, 2026-10-11, review @ 566b8a3)
+
+- **Architecture:** approved. Q1–Q5 yes.
+- **Q1 — P21 in Python first:** yes, and treated as a security correction, not parity work.
+- **Q2 — plugin builder at R4:** yes. K1–K5 are tested now; K6 is specified now and accepted at R4.
+- **Q3 — shared page asset:** yes, and it must work from installed distributions.
+- **Q4 — missing Origin allowed:** yes, with strict Host validation.
+- **Q5 — freeze G15/G16:** yes, with G15 declared an explicit exception to read purity.
+- **Repo:** separate engines, a thin R4 product layer, a unified R5 experience, and no early monorepo merge (§6).
+
+Amendments applied in this revision:
+- F1: Origin must match the request's own Host.
+- F2: fail-closed header handling and negative tests.
+- F3: the security headers apply to every method and every status.
+- F4: `::1` really binds, the URL has brackets, and ephemeral ports are tested.
+- F5: installed-distribution tests for both runtimes.
+- F6: read purity scoped to initialized stores, with G15 as its exception.
+- F7: malformed percent encoding and invalid UTF-8 added to the cues.
+- F8: K6 is declared now and accepted at R4.
+- §7: replaced by Lam's scope fence.
