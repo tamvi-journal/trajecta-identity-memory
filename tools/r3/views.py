@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import json
+import http.client
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -31,7 +34,37 @@ def cases():
     extra += [{"label": "brew-bad-host", "method": "BREW", "path": "/api/snapshot",
                "headers": [("Host", "evil.example")]},
               {"label": "brew", "method": "BREW", "path": "/api/snapshot", "comparison": "G16"}]
+    # Exact P2 cases only; folded rows have the explicitly allowed G17 asymmetry
+    # and are proved independently in each runtime's contract tests.
+    extra += [{"label": f"header-budget-{fields}-{evil}-{fragment}", "header_fields": fields,
+               "evil_host": evil, "fragment_size": fragment, "expected_status": status}
+              for fields, evil, status in ((99, False, 200), (100, False, 431),
+                                           (101, False, 431), (100, True, 431))
+              for fragment in (0, 3)]
     return request_cases() + extra
+
+
+def header_request(port, case):
+    lines = ["Host: evil.example" if case["evil_host"] else f"Host: 127.0.0.1:{port}"]
+    lines.extend(f"X-{i}: value" for i in range(1, case["header_fields"]))
+    raw = ("GET / HTTP/1.1\r\n" + "\r\n".join(lines) + "\r\n\r\n").encode("ascii")
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as connection:
+        size = case["fragment_size"] or len(raw)
+        for offset in range(0, len(raw), size):
+            try:
+                connection.sendall(raw[offset:offset + size])
+            except BrokenPipeError:
+                break
+            if case["fragment_size"]:
+                time.sleep(.001)
+        response = http.client.HTTPResponse(connection)
+        response.begin()
+        body = response.read()
+        assert response.status == case["expected_status"]
+        if response.status == 431:
+            assert body == b"Too many headers"
+        return {"status": response.status, "headers": {
+            key: response.getheader(key) for key in HEADERS}}, body
 
 
 def responses(runtime, root):
@@ -46,7 +79,7 @@ def responses(runtime, root):
         before = snapshot(root)
         output = []
         for case in cases():
-            actual, body = request(Server(), case)
+            actual, body = (header_request(port, case) if "header_fields" in case else request(Server(), case))
             assert set(actual["headers"]) == set(HEADERS)
             assert snapshot(root) == before, (runtime, case["label"], "view changed store tree")
             if case.get("comparison") == "G16":

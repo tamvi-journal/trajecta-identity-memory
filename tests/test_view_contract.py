@@ -2,6 +2,7 @@
 import http.client
 import socket
 import threading
+import time
 from contextlib import contextmanager
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -61,6 +62,44 @@ def policy(headers):
     for key, value in POLICY.items():
         assert headers[key] == value
     assert "Content-Type" in headers and "Content-Length" in headers
+
+
+@pytest.mark.parametrize("fields,folds,evil_host,expected", [
+    (99, 0, False, 200), (100, 0, False, 431), (101, 0, False, 431),
+    (98, 1, False, 200), (99, 1, False, 431), (100, 0, True, 431),
+])
+@pytest.mark.parametrize("fragment_size", [0, 3], ids=["whole", "3-byte-fragments"])
+def test_python_physical_header_line_budget(memory, fields, folds, evil_host, expected, fragment_size):
+    before = unchanged(memory)
+    with running(memory) as server:
+        # Includes Host; raw sockets add no implicit Connection/Accept-Encoding headers.
+        lines = ["Host: evil.example" if evil_host else f"Host: 127.0.0.1:{server.server_port}"]
+        lines.extend(f"X-{i}: value" for i in range(1, fields))
+        lines.extend(" continuation" for _ in range(folds))
+        raw = ("GET / HTTP/1.1\r\n" + "\r\n".join(lines) + "\r\n\r\n").encode("ascii")
+        with socket.create_connection(("127.0.0.1", server.server_port), timeout=5) as connection:
+            if fragment_size:
+                for offset in range(0, len(raw), fragment_size):
+                    try:
+                        connection.sendall(raw[offset:offset + fragment_size])
+                    except BrokenPipeError:
+                        # The oracle may reject at line 101 before the final blank line.
+                        break
+                    time.sleep(.001)
+            else:
+                connection.sendall(raw)
+            response = http.client.HTTPResponse(connection)
+            response.begin()
+            headers, body = dict(response.getheaders()), response.read()
+            assert response.status == expected
+            policy(headers)
+            assert headers["Content-Length"] == str(len(body))
+            if expected == 431:
+                assert body == b"Too many headers"
+                assert headers["Content-Type"] == "text/plain"
+            else:
+                assert body == view.PAGE
+    assert unchanged(memory) == before
 
 
 BAD = [

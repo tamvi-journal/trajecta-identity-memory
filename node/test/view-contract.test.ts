@@ -7,6 +7,51 @@ import { startView, parseCue } from "../src/view.ts";
 import { PROFILE, temporary, request, inventory, HEADERS } from "./view-support.ts";
 import { resolve } from "node:path";
 
+for (const [fields, folds, evilHost, expected] of [
+  [99, 0, false, 200],
+  [100, 0, false, 431],
+  [101, 0, false, 431],
+  [98, 1, false, 200],
+  [99, 1, false, 431],
+  [100, 0, true, 431],
+] as const) {
+  for (const fragmentSize of [0, 3]) {
+    test(`Python header-line budget: ${fields} fields, ${folds} folds, evil Host=${evilHost}, chunks=${fragmentSize || "whole"}`, async () => {
+      const root = temporary(),
+        memory = new IdentityMemory(PROFILE, resolve(root, "store.sqlite3"), { clock: new InjectedClock() });
+      memory.bootstrap();
+      memory.close();
+      const before = inventory(root),
+        server = await startView(memory, { port: 0 });
+      try {
+        // Host is included in fields; no Connection or other implicit header is sent.
+        const headers: [string, string][] = [["Host", evilHost ? "evil.example" : "127.0.0.1:{port}"]];
+        for (let i = 1; i < fields; i++) headers.push([`X-${i}`, "value"]);
+        if (folds) headers[headers.length - 1][1] += "\r\n continuation";
+        const response = await request(server, { headers, connectionClose: false, fragmentSize });
+        // G17 retains llhttp's stricter obs-fold refusal; no framing acceptance changes.
+        if (folds) assert(response.status >= 400);
+        else assert.equal(response.status, expected);
+        for (const key of HEADERS) assert.equal(typeof response.headers[key], "string");
+        assert.equal(response.headers["Cache-Control"], "no-store");
+        assert.equal(response.headers["X-Content-Type-Options"], "nosniff");
+        assert.equal(response.headers["X-Frame-Options"], "DENY");
+        assert.equal(response.headers["Referrer-Policy"], "no-referrer");
+        assert.equal(response.headers["Content-Length"], String(response.body.length));
+        if (!folds && expected === 431) {
+          assert.deepEqual(response.body, Buffer.from("Too many headers"));
+          assert.equal(response.headers["Content-Type"], "text/plain");
+        }
+        assert.deepEqual(inventory(root), before);
+      } finally {
+        await server.close();
+        memory.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+}
+
 for (const method of ["POST", "DELETE", "PUT", "PATCH", "OPTIONS", "HEAD", "CONNECT", "BREW"]) {
   test(`P21 every method guards before routing and stays pure: ${method}`, async () => {
     const root = temporary();

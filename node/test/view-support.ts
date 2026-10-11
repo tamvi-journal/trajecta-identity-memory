@@ -57,12 +57,25 @@ export async function request(server: Pick<RunningView, "port">, item: any, host
   );
   const raw =
     `${item.method ?? "GET"} ${item.path ?? "/"} HTTP/1.1${separator}${rendered.join(separator)}` +
-    `${rendered.length ? separator : ""}Connection: close${separator}${separator}`;
+    `${rendered.length ? separator : ""}${item.connectionClose === false ? "" : `Connection: close${separator}`}${separator}`;
   const bytes = await new Promise<Buffer>((resolve, reject) => {
     const socket = connect(server.port, host),
       chunks: Buffer[] = [];
     socket.setTimeout(5000, () => socket.destroy(new Error("view response timed out")));
-    socket.once("connect", () => socket.write(raw));
+    socket.once("connect", () => {
+      if (!item.fragmentSize) socket.write(raw);
+      else {
+        const bytes = Buffer.from(raw);
+        let offset = 0;
+        const write = () => {
+          if (socket.destroyed || offset >= bytes.length) return;
+          socket.write(bytes.subarray(offset, offset + item.fragmentSize));
+          offset += item.fragmentSize;
+          setTimeout(write, 1);
+        };
+        write();
+      }
+    });
     socket.on("data", (chunk) => chunks.push(chunk));
     socket.once("error", reject);
     socket.once("end", () => resolve(Buffer.concat(chunks)));

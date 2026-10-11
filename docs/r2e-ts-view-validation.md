@@ -34,7 +34,7 @@ fragmented BREW requests and Python-accepted LF framing, through the same P21 pa
 also routed through that path. A socket dispatches only its first request, matching Python's
 close-after-response behavior even if another request is pipelined in the same network chunk. No comparator exception was added for these boundaries.
 
-## Evidence
+## Initial evidence at `08e9ccf`
 
 - Python comprehensive P21–P24 / K1–K5 / view preflight: **75 tests + 24 subtests passed**.
 - Full Python suite: **604 tests + 24 subtests passed**.
@@ -54,3 +54,27 @@ Python production files, schema.sql, all frozen corpora and their manifests are 
 There is no unresolved spec ambiguity, guessed semantic rule, or deferred mismatch.
 CI runs npm acceptance and the new R3 X view proof on Ubuntu, macOS and Windows; the PR
 records the exact-head CI result separately from these local results.
+
+## Aux P2 follow-up: physical header-line limit
+
+Aux settled both follow-up STOPs: the oracle counts physical lines, including
+the terminating blank line, before P21; obs-fold remains a stricter G17 refusal.
+The specification amendment is PR #39 at `e05e623`, awaiting Lam's approval.
+
+The TS parser path now returns exactly `431` / `Too many headers` through the
+common six-header response function when an ordinary block exceeds 100 physical
+lines. There is no change to llhttp framing acceptance or the frozen G17 refusals.
+
+Both runtime contract suites send all six requested cases whole and in 3-byte
+fragments, without implicit headers. Python pins 99/100/101 and both fold counts;
+TS pins the four exact ordinary-header outcomes and the two G17 refusals.
+Every case checks the six policy headers and unchanged bytes, mtime and inventory.
+The existing R3 X comparator additionally checks the four exact cases in both
+fragment modes across all four writer/reader pairs; no comparator is relaxed.
+
+Local focused results: **12/12 TS**, **12/12 Python**. Full Node: **577 passed /
+578 total**, one existing Windows-only skip. Full Python, run sequentially:
+**616 tests + 24 subtests passed**. R3 X: **224 HTTP cases** and **two G15 runs**.
+The initial parallel Python run collided with Node's temporary-directory cleanup
+in the existing repository path scan; no test was changed or skipped to resolve
+that harness scheduling error. The PR records the updated exact-head CI receipt.

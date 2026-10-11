@@ -169,6 +169,12 @@ export async function startView(
     let rawHeaders = request.rawHeaders;
     if (prefix && end) {
       const lines = prefix.subarray(0, end.index).toString("latin1").split(/\r?\n/u).slice(1);
+      // http.client._read_headers counts every physical line, including the
+      // terminating blank line, before parsing fields or running P21.
+      if (lines.length + 1 > 100) {
+        send(response, 431, Buffer.from("Too many headers"), "text/plain");
+        return;
+      }
       rawHeaders = [];
       for (const line of lines) {
         if (/^[ \t]/u.test(line) && rawHeaders.length) rawHeaders[rawHeaders.length - 1] += "\r\n" + line;
