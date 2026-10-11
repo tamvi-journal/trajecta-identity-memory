@@ -691,7 +691,7 @@ export class MemoryStore {
       }
       return migrated;
     } catch (error) {
-      if (existsSync(work)) unlinkSync(work);
+      if ((!options.dryRun || rehearsal !== null) && existsSync(work)) unlinkSync(work);
       throw error;
     } finally {
       if (rehearsal) rmSync(rehearsal, { recursive: true, force: true });

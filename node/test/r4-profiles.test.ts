@@ -132,7 +132,7 @@ for (const failure of ["backup", "write", "replace", "close"])
     if (failure === "close")
       fs.closeSync = (fd) => {
         originalClose(fd);
-        throw error;
+        if (fs.existsSync(f.target + ".20260930T000000000001Z.bak")) throw error;
       };
     else if (failure === "replace")
       fs.renameSync = () => {
@@ -222,4 +222,27 @@ test("P26 concurrent parent belongs to the other process and is retained", (t) =
   }
   assert(triggered);
   assert.deepEqual(inventory(root), { ...before, external: null });
+});
+
+test("P26 rehearsal creation failure never deletes another actor's target", (t) => {
+  const root = fs.mkdtempSync(join(tmpdir(), "r4-dry-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const source = join(root, "source.sqlite3"),
+    target = join(root, "owned/deep/target.sqlite3");
+  fs.copyFileSync(join(ROOT, "spec/golden/identity-open/store.sqlite3"), source);
+  const before = fs.readFileSync(source),
+    original = fs.mkdtempSync;
+  fs.mkdtempSync = (() => {
+    fs.writeFileSync(target, "another actor");
+    throw new Error("rehearsal creation failed");
+  }) as any;
+  syncBuiltinESMExports();
+  try {
+    assert.throws(() => new MemoryStore(source).migrateTo(target, { dryRun: true }), /rehearsal creation failed/u);
+  } finally {
+    fs.mkdtempSync = original;
+    syncBuiltinESMExports();
+  }
+  assert.equal(fs.readFileSync(target, "utf8"), "another actor");
+  assert.deepEqual(fs.readFileSync(source), before);
 });
