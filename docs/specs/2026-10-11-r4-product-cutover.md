@@ -1,6 +1,6 @@
 # R4: the Trajecta product layer, installer, and cutover
 
-Status: approved by Lam @ 8dae7e3; §12 added after Ty's product question (Lam settlement 2026-10-11), revised after Lam #41 @ f10c11a (F41-1..F41-3) and @ 6cf5d29 (F41-4, F41-5). Revised after Lam's review @ b121be5 (REQUEST CHANGES: F40-1..F40-4; Q1–Q8 yes with conditions; §11). Author: Aux (leader). Builds on R0–R3 and R2e (main @ efa5149).
+Status: approved by Lam @ 8dae7e3; §12 added after Ty's product question (Lam settlement 2026-10-11), revised after Lam #41 @ f10c11a (F41-1..F41-3) and @ 6cf5d29 (F41-4, F41-5); PR 4a preflight settlements (Codex P4a-1..4) added. Revised after Lam's review @ b121be5 (REQUEST CHANGES: F40-1..F40-4; Q1–Q8 yes with conditions; §11). Author: Aux (leader). Builds on R0–R3 and R2e (main @ efa5149).
 
 ## 0. Goal, and what "done" means
 
@@ -41,6 +41,7 @@ Both engines have **zero npm dependencies**: no `dependencies` and no `devDepend
   - the commit SHA;
   - the **subdirectory** to take (`node/` for identity, the repo root for work);
   - the explicit list of runtime paths to copy (identity: `src`, `schema.sql`, `tables`, `assets`, `package.json`; work: `src`, `assets`, `package.json`);
+  - **bundled profiles (Codex P4a-2):** identity also pins `trajecta_identity/profiles/**`, taken from the repo **root** at the same SHA and copied to `engines/trajecta_identity/profiles/`. This keeps the engine's own relative lookup (`node/src/paths.ts`: `../../trajecta_identity/profiles`) valid with no engine patch and no environment default. Every file is digested in the lock. M2 proves that the default profile resolves offline with no profile environment set;
   - the SHA-256 of every copied file.
 - `tools/build-release.ts` fetches each pinned SHA, copies exactly those paths into `engines/identity/` and `engines/work/`, and **fails** if any file's SHA-256 differs from the lock. The lock is regenerated only by an explicit `tools/pin-engines.ts <sha>`, and that change is reviewed like code.
 - The product imports engines only through relative paths. From `product/src/engines.ts` that is `../../engines/identity/src/index.ts`. There is no package-name resolution, and M2's offline run proves the paths resolve.
@@ -57,6 +58,11 @@ Both engines have **zero npm dependencies**: no `dependencies` and no `devDepend
 
 It is **not** `npm pack`. npm publish is not used in R4.
 
+**Settlements (Codex P4a-3, P4a-4):**
+- `MANIFEST.json` is excluded from its own file map. It is authenticated by the enclosing tarball's SHA-256, and in a release by the signed `release.json`, which names that digest.
+- The foundation PR (4a) builds a **non-release verification artifact**: `MANIFEST.json` carries `"artifact": "foundation"` and has no `bin/`. Acceptance of `bin/` is deferred to 4c, which also switches the build to `"artifact": "release"`. A release build refuses unless `bin/` is present and complete.
+- The index sequence that published a release (§12.2) is written into a release `MANIFEST.json` by the 4d release/update build. A foundation artifact has no such field. Any update logic that reads the field treats its absence as "not a release" and refuses.
+
 ### 2.3 CLI and bin names
 
 - The product owns the only `trajecta` command.
@@ -68,7 +74,7 @@ It is **not** `npm pack`. npm publish is not used in R4.
 - The child therefore writes to the **same file descriptors** the user's shell gave the product:
   - the bytes are exact by construction;
   - `isatty()` is unchanged per stream, so a real terminal stays a terminal and a pipe stays a pipe;
-  - the TTY-only owner confirmations (`migrate-to`, receipts) behave exactly as when the engine is called directly, including their refusal when there is no TTY.
+  - the engine's TTY-only owner confirmations (the authority receipt commands, such as retract and legacy-close) behave exactly as when the engine is called directly, including their refusal when there is no TTY. **Correction (Codex P4a-1):** the engine's `migrate-to` has **no** TTY confirmation. It is an explicit user command that takes a target and writes a backup, and frozen corpus cases run it with tty=false. The pass-through keeps it exactly as it is. The TTY-confirmed migration belongs to the product's own `trajecta migrate-to --using` (§12.2, PR 4d), never to the engine.
 - The product never captures, buffers or re-encodes engine streams.
 - **Exit and signals:**
   - The product exits with the child's exit code.
@@ -76,7 +82,7 @@ It is **not** `npm pack`. npm publish is not used in R4.
   - SIGINT and SIGTERM sent to the product while the child runs are forwarded to the child, never handled by the product.
 - **M2 proves:**
   - non-interactive: the full cli-v1 corpus and the work CLI suite, with byte-exact stdout and stderr and exact exit codes;
-  - interactive, on POSIX: a PTY test using `script(1)` on macOS and Linux, covering a `migrate-to` confirmation that is accepted and one that is typed wrong, an `isatty` probe, and Ctrl-C propagation;
+  - interactive, on POSIX: a PTY test using `script(1)` on macOS and Linux, covering an authority receipt confirmation that is accepted and one that is typed wrong, an `isatty` probe, and Ctrl-C propagation;
   - no TTY: the engine's refusal, with its bytes and exit code unchanged;
   - Windows interactive confirmation is checked by hand inside M8, because hosted runners have no console. Windows non-TTY refusal stays automated.
 
@@ -179,7 +185,7 @@ It is **not** `npm pack`. npm publish is not used in R4.
 10. **Plugin file (§6).**
 11. **Store bootstrap,** only for a store that does not exist yet.
     - A bootstrapped empty store is a **valid state**. It is not rolled back: a later failure leaves it, and the next install or `doctor` reports it.
-    - An existing store is never modified by install. Migration happens only through `migrate-to`, with a TTY confirmation.
+    - An existing store is never modified by install. Migration happens only through an explicit user command: the engine's `migrate-to` (no TTY gate; frozen engine contract), or the product's `trajecta migrate-to --using`, which requires a backup and a typed TTY confirmation (§12.2).
 12. **`doctor`.** A failure here exits non-zero. The new version stays committed, so the user can run `trajecta install --rollback`.
 
 **Rollback.** `--rollback` swaps the two lines of `current` with one rename. It is allowed only if line 2 names a version directory whose `MANIFEST.json` still verifies. The swap is its own inverse, so rollback is always possible after any committed switch whose previous version is intact. Uninstall never removes the version named on line 2 while line 1 points elsewhere.
@@ -281,7 +287,7 @@ It is **not** `npm pack`. npm publish is not used in R4.
 1. **Spec**: this file.
 2. **Identity repo**: P25, P26, the corpus updates, the `tests.yml` version fix, the G17 wording fix, the `import-aml` archive, and the Node 24 matrix for the identity corpora (M1, M6, M7).
 3. **Work repo**: the Node 24 matrix, and a tag for the pinned commit (M1).
-4. **New `trajecta` repo**: product package, CLI, version, `compat.json`, installer, plugin builder, uninstall, and the M2–M5 CI.
+4. **New `trajecta` repo**: product package, CLI, version, `compat.json`, installer, plugin builder, uninstall, and the M2–M5 CI. It ships as four sequential PRs, each reviewed by Lam at its exact head: **4a** foundation (engine lock and vendoring, deterministic build, CLI pass-through, adapter, version, `compat.json`, and the pass-through and authority parts of M2); **4b** installer and uninstall (§5, M3); **4c** plugin builder and wrappers (§6, §5.3, M5, `bin/`); **4d** `trajecta update` (§12.2 and its M2/M3 additions). The repo is private until cutover.
 5. **Cutover**: README and docs move, the old install scripts become pointers, and release 0.5.0 is tagged after M8.
 
 Merge rule: unchanged. Lam approves the exact head, CI is green on that head, there are no open findings, and Aux's review is done. Aux merges and reports to Ty.
@@ -394,7 +400,7 @@ Updates reuse the install machinery exactly: Phase A/B/C (§5.2), a versioned ro
   - An ordinary downgrade is refused.
   - Updating to the version already installed writes nothing.
   - `--version <v>` selects a specific signed release, but **never** bypasses integrity, freshness or compatibility.
-- **Stores are never migrated automatically.** Only `migrate-to`, run by the user on a TTY, writes a schema.
+- **Stores are never migrated automatically.** A schema is written only by an explicit user command: the product's `trajecta migrate-to --using`, which requires a backup and a typed TTY confirmation, or the engine's own `migrate-to` called directly, which takes an explicit target and writes a backup with no TTY gate.
 - **Rollback and data:** `--rollback` is **refused** if the previous version cannot read the current store, for example after a migration. The refusal names the backup to restore with.
 - **Checking for updates:**
   - `trajecta doctor` stays **offline and read-only**. It may show a notice that was verified earlier and cached.
@@ -404,7 +410,7 @@ Updates reuse the install machinery exactly: Phase A/B/C (§5.2), a versioned ro
 
 ### 12.3 Gates added
 
-- **M2:** signed metadata (valid, tampered, wrong key, rotated key with chain, rotated key without chain, rotation remembered after `--rollback`); sequence replay and expiry; replay attempted after `--rollback`, after `uninstall --version` + reinstall, and after a crash at each update-state write; missing and corrupt update state fail closed; `--reset-state` sets the floor from installed MANIFESTs exactly, and the test pins that an index between that floor and the previously seen higher sequence is accepted only after the typed reset, never without it; downgrade and same-version refusal; compatibility preflight refusal; TTY-only `migrate-to` after an update.
+- **M2:** signed metadata (valid, tampered, wrong key, rotated key with chain, rotated key without chain, rotation remembered after `--rollback`); sequence replay and expiry; replay attempted after `--rollback`, after `uninstall --version` + reinstall, and after a crash at each update-state write; missing and corrupt update state fail closed; `--reset-state` sets the floor from installed MANIFESTs exactly, and the test pins that an index between that floor and the previously seen higher sequence is accepted only after the typed reset, never without it; downgrade and same-version refusal; compatibility preflight refusal; TTY-only product `migrate-to --using` after an update (the product guard, not the engine).
 - **M3:** crashes at every Phase A/B/C boundary during an update, and around the update-state write; the exact order in 12.2, asserting that `current` never names an incompatible version; `migrate-to --using` from a staged target, a migration failure, and a crash between migration and switch followed by a converging re-run; re-run convergence; rollback, and its refusal after a migration.
 - **M5:** the plugin wrapper keeps working across an update without a rebuild.
 - **M3 (uninstall, F41-5):** `update-state.json` survives `uninstall --version`, `--rollback`, a refused or non-TTY full uninstall, a full uninstall where another removal failed, and a symlink at that path; it is removed only by a confirmed full uninstall with no version left.
