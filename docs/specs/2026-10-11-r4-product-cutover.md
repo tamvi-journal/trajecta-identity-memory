@@ -1,6 +1,6 @@
 # R4: the Trajecta product layer, installer, and cutover
 
-Status: approved by Lam @ 8dae7e3; §12 added after Ty's product question (Lam settlement 2026-10-11), revised after Lam #41 @ f10c11a (F41-1..F41-3) and @ 6cf5d29 (F41-4, F41-5); PR 4a preflight settlements (Codex P4a-1..4) added. Revised after Lam's review @ b121be5 (REQUEST CHANGES: F40-1..F40-4; Q1–Q8 yes with conditions; §11). Author: Aux (leader). Builds on R0–R3 and R2e (main @ efa5149).
+Status: approved by Lam @ 8dae7e3; §12 added after Ty's product question (Lam settlement 2026-10-11), revised after Lam #41 @ f10c11a (F41-1..F41-3) and @ 6cf5d29 (F41-4, F41-5); PR 4a preflight settlements (Codex P4a-1..4) added; §2.3 pass-through moved in-process so signals are delivered exactly once in every topology (Aux R1-1, Lam R44-1). Revised after Lam's review @ b121be5 (REQUEST CHANGES: F40-1..F40-4; Q1–Q8 yes with conditions; §11). Author: Aux (leader). Builds on R0–R3 and R2e (main @ efa5149).
 
 ## 0. Goal, and what "done" means
 
@@ -67,22 +67,25 @@ It is **not** `npm pack`. npm publish is not used in R4.
 
 - The product owns the only `trajecta` command.
 - The work engine's own `trajecta` and `trajecta-work-mcp` bins are **not** exposed by the product, so there is no collision. Its CLI is reached as `trajecta work …` and its MCP server through the plugin. The work repo is unchanged.
-- **Pass-through contract (Lam R4-F7):** `trajecta identity …` and `trajecta work …` spawn the engine CLI as a child process with:
-  - the exact argv;
-  - the same cwd and environment;
-  - **`stdio: "inherit"` for all three streams.**
-- The child therefore writes to the **same file descriptors** the user's shell gave the product:
-  - the bytes are exact by construction;
-  - `isatty()` is unchanged per stream, so a real terminal stays a terminal and a pipe stays a pipe;
-  - the engine's TTY-only owner confirmations (the authority receipt commands, such as retract and legacy-close) behave exactly as when the engine is called directly, including their refusal when there is no TTY. **Correction (Codex P4a-1):** the engine's `migrate-to` has **no** TTY confirmation. It is an explicit user command that takes a target and writes a backup, and frozen corpus cases run it with tty=false. The pass-through keeps it exactly as it is. The TTY-confirmed migration belongs to the product's own `trajecta migrate-to --using` (§12.2, PR 4d), never to the engine.
+- **Pass-through contract (Lam R4-F7; execution model amended after Aux R1-1 and Lam R44-1):** `trajecta identity …` and `trajecta work …` run the engine CLI **in the product's own process**, not as a child process:
+  - the product's dispatcher sets `process.argv` to `[process.execPath, <absolute engine cli.ts path>, ...the user's remaining arguments]` and then dynamically imports that engine entry module. Both engine entries run from that argv: identity through its `import.meta.url === argv[1]` guard, work through its top-level code;
+  - before the import, the product dispatcher does nothing observable: it installs no signal or exit handlers, does not read stdin, writes nothing to stdout or stderr, and does not change cwd, env, umask or any file descriptor. After the import, the engine owns the process completely, including `process.exitCode` and `process.exit`, and the product never overrides them. Its own error wrapper is never applied to an engine run. M2 enforces this with a source scan of the dispatcher path, together with the byte-exact corpora.
+- **Why in-process:** there is exactly one process, so stdio, TTY, exit status and signals are the engine's own by construction.
+  - The **same file descriptors** reach the engine, so the bytes are exact and `isatty()` is unchanged per stream.
+  - The engine's TTY-only owner confirmations (the authority receipt commands, such as retract and legacy-close) behave exactly as when the engine is called directly, including their refusal when there is no TTY. **Correction (Codex P4a-1):** the engine's `migrate-to` has **no** TTY confirmation. It is an explicit user command that takes a target and writes a backup, and frozen corpus cases run it with tty=false. The pass-through keeps it exactly as it is. The TTY-confirmed migration belongs to the product's own `trajecta migrate-to --using` (§12.2, PR 4d), never to the engine.
+  - **Signals are delivered exactly once in every topology** (Lam R44-1): terminal Ctrl-C and Ctrl-\, `kill -<sig> <pid>`, `kill -<sig> -<pgid>`, job control, and Windows console events all reach the one process that runs the engine, exactly as they would reach the engine run directly. There is no forwarding, no re-raising and no source inference. (The child-process design was rejected: a parent cannot tell a process-group broadcast from a PID-directed signal, so it delivers either twice, as in R1-1 where `identity view` exits 130 instead of 0, or not at all. Moving the child into its own process group would take it out of the terminal's foreground group and break TTY confirmations.)
+  - Exit status is the engine's own, including death by signal.
 - The product never captures, buffers or re-encodes engine streams.
-- **Exit and signals:**
-  - The product exits with the child's exit code.
-  - If a signal killed the child, the product removes its own handler and re-raises that signal on itself (POSIX). On Windows it exits with the child's code.
-  - SIGINT and SIGTERM sent to the product while the child runs are forwarded to the child, never handled by the product.
+- **Wrappers must not add a parent back (4c):** the POSIX `sh` wrappers (§5.3) start Node with `exec`. A Windows `cmd` wrapper necessarily stays a parent, so 4c/M5 must test its behaviour on console Ctrl-C, including cmd's "Terminate batch job (Y/N)?" prompt, and either prove parity with a direct run or state the difference as a declared Windows limitation that M8 checks.
+- **M2 also proves, with the real engines** (macOS and Linux PTYs, and Windows where marked):
+  - `identity view --no-browser --port 0` under a terminal Ctrl-C gives the same transcript and exit code directly and through the product;
+  - with a TTY on stdin, `kill -INT <pid>` aimed at the process gives the same result directly and through the product;
+  - `kill -TERM -<pgid>` gives the same result directly and through the product;
+  - with no TTY, SIGINT and SIGTERM give the same result directly and through the product;
+  - `process.pid` seen by the engine equals the product's pid, so no extra process exists (all three OSes).
 - **M2 proves:**
   - non-interactive: the full cli-v1 corpus and the work CLI suite, with byte-exact stdout and stderr and exact exit codes;
-  - interactive, on POSIX: a PTY test using `script(1)` on macOS and Linux, covering an authority receipt confirmation that is accepted and one that is typed wrong, an `isatty` probe, and Ctrl-C propagation;
+  - interactive, on POSIX: a PTY test using `script(1)` on macOS and Linux, covering an authority receipt confirmation that is accepted and one that is typed wrong, an `isatty` probe, and the Ctrl-C and signal parity listed above;
   - no TTY: the engine's refusal, with its bytes and exit code unchanged;
   - Windows interactive confirmation is checked by hand inside M8, because hosted runners have no console. Windows non-TTY refusal stays automated.
 
