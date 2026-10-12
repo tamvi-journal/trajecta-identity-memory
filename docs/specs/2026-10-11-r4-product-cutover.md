@@ -1,6 +1,6 @@
 # R4: the Trajecta product layer, installer, and cutover
 
-Status: approved by Lam @ 8dae7e3; §12 added after Ty's product question (Lam settlement 2026-10-11), revised after Lam #41 @ f10c11a (F41-1..F41-3) and @ 6cf5d29 (F41-4, F41-5); PR 4a preflight settlements (Codex P4a-1..4) added. Revised after Lam's review @ b121be5 (REQUEST CHANGES: F40-1..F40-4; Q1–Q8 yes with conditions; §11). Author: Aux (leader). Builds on R0–R3 and R2e (main @ efa5149).
+Status: approved by Lam @ 8dae7e3; §12 added after Ty's product question (Lam settlement 2026-10-11), revised after Lam #41 @ f10c11a (F41-1..F41-3) and @ 6cf5d29 (F41-4, F41-5); PR 4a preflight settlements (Codex P4a-1..4) added; §2.3 signal rule amended (Aux R1-1). Revised after Lam's review @ b121be5 (REQUEST CHANGES: F40-1..F40-4; Q1–Q8 yes with conditions; §11). Author: Aux (leader). Builds on R0–R3 and R2e (main @ efa5149).
 
 ## 0. Goal, and what "done" means
 
@@ -79,7 +79,13 @@ It is **not** `npm pack`. npm publish is not used in R4.
 - **Exit and signals:**
   - The product exits with the child's exit code.
   - If a signal killed the child, the product removes its own handler and re-raises that signal on itself (POSIX). On Windows it exits with the child's code.
-  - SIGINT and SIGTERM sent to the product while the child runs are forwarded to the child, never handled by the product.
+  - **Signals (amended after Aux R1-1 on product #1):** the child must receive each signal exactly once.
+    - On POSIX, when the product's stdin is a TTY, a terminal Ctrl-C delivers SIGINT to the whole foreground process group, so the child already has it. The product does **not** forward SIGINT. It installs a no-op handler, waits, and mirrors the child's outcome. Forwarding would deliver the signal twice and break engines with one-shot graceful handlers: `identity view` uses `process.once("SIGINT")`, and with a double delivery it exits 130 where it should exit 0.
+    - When stdin is not a TTY, SIGINT sent to the product is forwarded.
+    - SIGTERM is always forwarded.
+    - In no case does the product act on a signal itself.
+    - If re-raising the child's terminating signal does not end the product, it exits with `128 + signal number`.
+    - M2 proves, on macOS and Linux PTYs with the **real** engine, that `identity view` under Ctrl-C produces the same transcript and exit code directly and through the product. It also proves non-TTY SIGINT forwarding and SIGTERM forwarding.
 - **M2 proves:**
   - non-interactive: the full cli-v1 corpus and the work CLI suite, with byte-exact stdout and stderr and exact exit codes;
   - interactive, on POSIX: a PTY test using `script(1)` on macOS and Linux, covering an authority receipt confirmation that is accepted and one that is typed wrong, an `isatty` probe, and Ctrl-C propagation;
