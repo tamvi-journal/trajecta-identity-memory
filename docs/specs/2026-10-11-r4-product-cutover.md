@@ -1,6 +1,6 @@
 # R4: the Trajecta product layer, installer, and cutover
 
-Status: approved by Lam @ 8dae7e3; §12 added after Ty's product question (Lam settlement 2026-10-11), revised after Lam #41 @ f10c11a (F41-1..F41-3) and @ 6cf5d29 (F41-4, F41-5); PR 4a preflight settlements (Codex P4a-1..4) added; §2.3 pass-through moved in-process so signals are delivered exactly once in every topology (Aux R1-1, Lam R44-1). Revised after Lam's review @ b121be5 (REQUEST CHANGES: F40-1..F40-4; Q1–Q8 yes with conditions; §11). Author: Aux (leader). Builds on R0–R3 and R2e (main @ efa5149).
+Status: approved by Lam @ 8dae7e3; §12 added after Ty's product question (Lam settlement 2026-10-11), revised after Lam #41 @ f10c11a (F41-1..F41-3) and @ 6cf5d29 (F41-4, F41-5); PR 4a preflight settlements (Codex P4a-1..4) added; §2.3 pass-through moved in-process so signals are delivered exactly once in every topology (Aux R1-1, Lam R44-1); PR 4b preflight settlements (Codex P4b-1..4). Revised after Lam's review @ b121be5 (REQUEST CHANGES: F40-1..F40-4; Q1–Q8 yes with conditions; §11). Author: Aux (leader). Builds on R0–R3 and R2e (main @ efa5149).
 
 ## 0. Goal, and what "done" means
 
@@ -138,12 +138,18 @@ It is **not** `npm pack`. npm publish is not used in R4.
   - An attacker would have to change all three.
   - The README states the honest limit: for the developer beta, trust rests on that out-of-band hash match plus TLS to GitHub. It is not a full supply-chain guarantee.
 - **Key rotation** needs a new installer whose new hash is published in the same three places, together with a statement signed by the old key.
+- **Before a production key exists (Codex P4b-1).** Until Ty gives Q9 consent and a reviewed key is embedded, the installer's trust-anchor constant is **empty**. With an empty anchor, production install fails closed with `trajecta: no trusted release key configured` and changes nothing.
+  - Production install also refuses any artifact whose `MANIFEST.json` says `"artifact": "foundation"`.
+  - 4b tests exercise the real verify, stage, commit and doctor paths on a **non-release foundation fixture**, signed with an ephemeral key generated in test-process memory and never written anywhere. A test-only `--import` hook substitutes both the anchor and the foundation allowance, using the same seam pattern as the 4a test seams. There is **no** environment variable, flag or config file that changes trust in production code, and a source scan enforces this.
+  - The wrapper and plugin effects in `.planned.json` arrive with 4c. In 4b the planned set holds the version directory, its Node path and the ledger, and it is extensible.
 
 ### 5.2 Steps, and the transaction boundary
 
 `install.sh` and `install.ps1` are the only code that runs before verification. They are short, and they are reviewed as security code.
 
-**Phase A: verify and stage.** Nothing visible to the user changes in this phase. A failure here deletes only the staging directory this run created.
+**Store bootstrap (Codex P4b-2).** Install bootstraps identity through its public `init` and nothing else. Install **never writes work state**. A missing work store is the work engine's valid lazy-empty state: `TrajectaStore.list()` treats missing state as an empty `trajecta.state/v1` store. Install fabricates no work or capability event, and doctor checks work read-only through its public API. An existing identity store at legacy v4 makes doctor refuse, which is the engine's own behaviour, and install never migrates.
+
+**Phase A: verify and stage.** Nothing visible to the user changes in this phase. A failure here deletes only the staging directory this run created. **The whole install (Phases A, B and C) runs under the single install lock (Codex P4b-3).** The lock is taken right after the Node probe, so no two runs ever stage concurrently.
 1. **Probe Node.** Look on PATH, then in known locations (Homebrew, nvm/fnm/volta shims, `%ProgramFiles%\nodejs`), version-probing each candidate against the supported set. If none passes, write `trajecta: need Node 22.19+ or 24 LTS` to stderr, exit 1, and change nothing.
 2. **Verify the release.** Check `release.json.sig` with the embedded key, using an **inline** verifier run by the probed Node (`node -e`). It performs exactly the §5.1 contract: `crypto.verify(null, releaseJsonBytes, createPublicKey({key, format: "der", type: "spki"}), signatureBytes)`. Then check the tarball's SHA-256 and size against `release.json`. Any mismatch → exit 1.
 3. **Inspect, then extract (Lam R4-F5).** The system `tar` is not used.
@@ -162,7 +168,8 @@ It is **not** `npm pack`. npm publish is not used in R4.
 **Phase B: commit.** This is the only switch point. Lam R4-F6 applies to this phase.
 
 0. **Lock (race-safe; Lam #40 @ 560742a item 4).**
-   - **Acquire:** create `<root>/.lock` by exclusive create (`wx`). It holds an **owner token**: 128 random bits, plus the pid, hostname and creation time. The holder deletes the lock only after re-reading it and confirming its own token.
+   - **Acquire (publication primitive amended, Codex P4b-3):** the run writes its complete owner record to `<root>/.lock.<token>.tmp` and fsyncs it. The record holds the **owner token** (128 random bits) plus the pid, hostname and creation time. It then publishes with `link(tmp, <root>/.lock)`: an atomic exclusive create that fails with EEXIST and never exposes partial content. Finally it unlinks the tmp file. The same primitive publishes `.lock.recover`. The holder deletes the lock only after re-reading it and confirming its own token.
+   - **Unreadable lock:** a `.lock` or `.lock.recover` that is empty, truncated or unparseable, whether left by a pre-primitive crash or by corruption, is **never auto-recovered**. The run refuses and prints the `--break-lock` instructions. On a TTY, `--break-lock` shows that file's bytes (hex for anything unprintable), its size and its mtime, and requires a typed confirmation. Immediately before unlinking it re-reads the file and compares the bytes; on any difference it aborts.
    - **Busy:** if `.lock` exists and its pid is alive on this host (`process.kill(pid, 0)` succeeds), the run refuses with `trajecta: another install is running (pid N)`. PID reuse can only make a dead holder look alive. That case **blocks**; it never corrupts.
    - **Stale recovery is serialized** by a second mutex, `<root>/.lock.recover`, also taken by exclusive create with its own token.
      - The recoverer re-reads `.lock` **while holding `.recover`**. It unlinks `.lock` only if the file still holds the **same dead token** it first read. Then it releases `.recover` and retries acquiring `.lock` from the start.
@@ -194,7 +201,7 @@ It is **not** `npm pack`. npm publish is not used in R4.
 **Rollback.** `--rollback` swaps the two lines of `current` with one rename. It is allowed only if line 2 names a version directory whose `MANIFEST.json` still verifies. The swap is its own inverse, so rollback is always possible after any committed switch whose previous version is intact. Uninstall never removes the version named on line 2 while line 1 points elsewhere.
 
 **Re-entry invariants:**
-- A run interrupted in Phase A leaves at most a `.staging-*` directory, which the next run removes.
+- A run interrupted in Phase A leaves at most a `.staging-*` directory. The next run removes it **only while holding the install lock**. Every run stages under the lock, so a `.staging-*` that exists while the lock is held cannot belong to a live run, and that fact is the proof of abandonment.
 - After step 8, the system runs either the old version or the new one, never a mix.
 - Phase C steps are idempotent, and each one is ledgered when it completes.
 - **Crash tests (M3)** kill the process: after the rename; after `.planned.json`; on each side of the `current` rename; and between each Phase C effect and its ledger entry. A re-run must converge, and `--rollback` must work from every committed state.
@@ -219,6 +226,11 @@ It is **not** `npm pack`. npm publish is not used in R4.
 - A changed or unlisted file is kept and reported.
 - A directory is removed only if this install created it **and** it is empty.
 - Stores, profiles and client configs are never touched. The command prints where the data remains.
+- **Full uninstall order and control files (Codex P4b-4).** A full uninstall runs under the install lock, in this order, and a re-run converges from any crash point:
+  1. Atomically replace `current` with the single line `uninstalling`. From then on every command refuses with "trajecta is being uninstalled; run trajecta uninstall", so no half-removed version can run. **Rollback protection (the line-2 rule) ends here, by design:** a full uninstall removes every version, and the line-2 rule governs only `uninstall --version` and `--rollback`.
+  2. Remove each version directory's ledgered paths whose hashes match.
+  3. A version **remains installed** if anything is left in its directory: a modified or unlisted file, or its `MANIFEST.json`. If any version remains, stop here. `current` stays `uninstalling`, `owned.json` and `update-state.json` are kept, and the report names every retained file. Running `trajecta install` again repairs the install. After the owner has removed the reported files, `trajecta uninstall` finishes the job.
+  4. Only if no version remains, remove shared ledgered paths, then the named **control files**. These are an explicit, narrow list that is not in the ledger because they cannot hash their own final bytes: `<root>/current`, `<root>/owned.json`, `<root>/.planned.json`, and any `<root>/.lock.*.tmp` whose owner run is not live (verified under the lock). Each must be a regular file, not a symlink. After that comes `update-state.json` under its own exception (below). Then the run releases and unlinks `.lock`, and finally removes `<root>` itself, only if it is empty.
 - **One owner-authorized exception: `<root>/update-state.json` (Lam #41 F41-5; §12.2).** It is not in `owned.json`, so the rules above never remove it. Only a **full** uninstall may, and only when all of these hold:
   - no version remains installed after this run's other removals have succeeded; if any removal failed or was refused, the state file is kept;
   - the path is exactly `<root>/update-state.json`, a regular file (not a symlink), inside the `<root>` this installer owns;
