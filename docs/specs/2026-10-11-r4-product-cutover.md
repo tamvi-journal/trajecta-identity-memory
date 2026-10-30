@@ -484,14 +484,39 @@ These settle the three contract gaps Codex reported before writing any 4c code. 
       - Success: rewrite the record as `{dir, state: "created"}` and fsync the parent.
       - Only `created` records become `shared` ledger entries of `kind: "external-dir"`.
       - Crash between `mkdir` and `created`: the next run finds an `intent` record whose directory exists. Nothing proves this product created it, so the directory is **retained** and reported, never removed, and the record is dropped.
-    - **Temp file.** Write the record `{tmp: <user-bin>/.trajecta.<128-bit random>.tmp, sha256: <planned launcher SHA-256>, state: "intent"}`. Then create that exact path with exclusive create (`wx`), write, flush, rename onto `trajecta`, re-read, ledger the launcher, and drop the record.
-      - **On a later run, a recorded temp file is removed only if** it is a regular file at exactly the recorded path, and its bytes are a prefix of, or equal to, the planned launcher bytes.
-      - Any other file is retained and reported: one that matches only the name pattern, one with other bytes, or one with no record.
+    - **Temp file (Lam R48-3).** An `intent` proves nothing about who created a file. Only a `created` receipt, written after this process's own exclusive create succeeded, proves ownership.
+      1. Write the record `{tmp: <user-bin>/.trajecta.<128-bit random>.tmp, state: "intent"}`.
+      2. Create that exact path with exclusive create (`wx`, `O_CREAT|O_EXCL|O_NOFOLLOW`).
+         - **`EEXIST`:** drop the record, claim nothing, report, and retry with a fresh name.
+      3. Immediately `fstat` the open descriptor. Rewrite the record as `{tmp, dev, ino, sha256: <planned launcher SHA-256>, state: "created"}`, and fsync the journal before writing any byte to the file.
+      4. Write the bytes and flush.
+      - **Crash between `wx` and the `created` receipt:** the file is unproved. It is **retained** and reported, never deleted, and the `intent` record is dropped.
+      - **On a later run, a temp file is removed only if** its record is `created`, `lstat` shows a regular file at exactly that path whose `dev`/`ino` equal the receipt, and its bytes are a prefix of, or equal to, the planned launcher bytes.
+      - **Anything else is retained and reported:** a file with a different inode at that path, one with foreign bytes, an `intent`-only record, or a name with no record.
       - Nothing is ever deleted because its name matches a pattern.
-    - **Launcher.** It becomes a `shared` ledger entry of `kind: "external"` only after the rename and re-hash, as in §5.2. A file already at `<user-bin>/trajecta` that is not ledgered with a matching hash is left alone and reported. It is never overwritten.
+    - **Launcher publication (Lam R48-4).** It is never a plain `rename` onto the destination.
+      - **Absent or unowned destination:** publish with `link(tmp, <user-bin>/trajecta)`, which fails atomically with `EEXIST` and never replaces anything.
+        - On success, re-read the destination, check its `dev`/`ino` equal the temp file's and its hash equals the plan, ledger it as `kind: "external"` with `dev`/`ino`, then unlink the temp file under the temp rule.
+        - On `EEXIST`, a file appeared that is not ours. Its bytes are never touched. Install reports it and refuses this step, and the temp file is removed under the temp rule.
+        - If the filesystem refuses hard links (`EPERM`, `ENOTSUP`, `EXDEV`), the step fails closed with a typed error that suggests `--no-user-bin`.
+      - **Destination already ledgered, current hash matching the ledger, and planned bytes equal:** a no-op. Nothing is written.
+      - **Destination already ledgered, planned bytes differ (a newer template):** a journaled move-aside, never an overwrite.
+        1. Record `{aside: <user-bin>/.trajecta.<random>.old, state: "intent"}`.
+        2. `rename(trajecta, aside)`.
+        3. Verify that the moved file's `dev`/`ino` and hash equal the ledger entry.
+           - **If they match:** mark the aside `created` (it is our file), publish the new temp file with `link` as above, then unlink the aside.
+           - **If they do not match:** it was a foreign file swapped in. Put it back with `link(aside, trajecta)`, which never replaces anything. If that link meets `EEXIST`, leave the file at the aside name. Either way, report, and never delete it.
+      - Windows creates no external copy (§13.1), so this protocol is POSIX only.
+      - **M3 (R48-3/R48-4):**
+        - intent, then a foreign process creates the recorded temp path, empty and as an exact prefix, then `wx` meets `EEXIST`, and a kill: the foreign file is retained;
+        - a kill between `wx` and `created`: the file is retained;
+        - an inode swap of a `created` temp file: it is retained;
+        - a competing process creates `<user-bin>/trajecta` between the pre-check and `link`: its bytes are unchanged and install refuses and reports;
+        - a foreign swap at the destination during move-aside: it is restored or retained, never deleted;
+        - a no-hard-link filesystem: a typed refusal.
     - Generic outside-root entries stay forbidden. The ledger accepts outside-root paths only in these two kinds: the one file `<user-bin>/trajecta` and the directories with `created` receipts.
   - **Uninstall.** Full uninstall only (§5.4 step 4):
-    1. Unlink the external launcher only if its SHA-256 still matches.
+    1. Unlink the external launcher only if its `dev`/`ino` and SHA-256 still match the ledger.
     2. Remove recorded temp files under the rule above.
     3. `rmdir` the `external-dir` entries, deepest first, each only if it is empty.
     - Anything else is retained and reported, as for any shared path. Uninstall finalizes with `external.json` removed only after it holds no record.
