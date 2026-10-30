@@ -486,10 +486,17 @@ These settle the three contract gaps Codex reported before writing any 4c code. 
 
 ### 13.2 S2: one product plugin, one shared MCP wrapper, recipe in argv
 
-- **Servers.** One product plugin per profile registers **two** MCP servers: `trajecta-identity-<safe profile>` (engine `identity`) and `trajecta-work-<safe profile>` (engine `work`). `--name <label>` overrides the identity label only; the work label is `<label>-work`.
+- **Servers.** One product plugin per profile registers **two** MCP servers: `trajecta-identity-<slug>` (engine `identity`) and `trajecta-work-<slug>` (engine `work`). `--name <label>` overrides the identity label only; the work label is then `<label>-work`.
+- **Label slug (Codex review @ 1c1686b).** Server labels are not filesystem names, so they do not use `safe_fs_name` (which keeps non-ASCII letters, such as `hồ-sơ`).
+  - If the profile name already matches `[a-z0-9._-]{1,46}`, the slug is the profile name.
+  - Otherwise the slug is the profile name mapped as follows: Unicode NFKD, combining marks dropped, `đ`/`Đ` → `d`, lowercased, each run of characters outside `[a-z0-9._-]` → `-`, leading and trailing `-` trimmed, truncated to 37 characters. Then append `-` and the first 8 hex digits of SHA-256 of the profile's UTF-8 bytes. The hash keeps distinct profiles distinct (`hồ-sơ` and `ho-so` differ), and it also covers an empty mapping.
+  - The longest default label is therefore `trajecta-identity-` (18) + 46 = 64.
+  - `--name` must match `[A-Za-z0-9._-]{1,59}`, so `<label>-work` is still at most 64. Otherwise `trajecta plugin` refuses with a typed error and writes nothing.
+  - Both generated labels are validated against the grammar before anything is written. The plugin **file** name keeps `safe_fs_name`.
+  - Tests: a Vietnamese profile, a 48-character ASCII profile, a 60-character `--name` (refused), and two profiles whose mapping collides.
 - **Recipe grammar.** `.mcp.json` calls the shared wrapper with:
   `<root>/bin/trajecta-mcp <label> --engine identity|work [--default KEY VALUE]... -- <engine args>`
-  - `<label>` is the client-facing server name. It is used in the `<label>: need …` refusal and nothing else. Allowed characters are `[A-Za-z0-9._-]`, 1–64 of them.
+  - `<label>` is the client-facing server name. It is used in the `<label>: need …` refusal and nothing else. Allowed characters are `[A-Za-z0-9._-]`, 1–64 of them; the builder generates labels as in the slug rule above.
   - `KEY` is one of exactly `TRAJECTA_IDENTITY_DATA_DIR`, `TRAJECTA_IDENTITY_PROFILES`, `TRAJECTA_WORK_ROOT` and `TRAJECTA_HOME`. Any other key, a repeated key, or a missing `--` is a usage error (exit 2) before any import.
   - Identity: `<engine args>` is `--profile <p>`. The defaults are rendered from the R2e flags, with `--work-root` producing `TRAJECTA_WORK_ROOT`.
   - Work: `<engine args>` is empty, and `--work-root` produces `TRAJECTA_HOME`.
