@@ -578,3 +578,38 @@ The extractor gets a fixed decompression cap and a physical-header/entry cap, en
 - every exact gate;
 - the empty production anchor;
 - the #47 writer-lifetime law.
+
+### 13.5 Windows native validation through system PowerShell (Codex STOP @ 85ef90a; Aux settlement 2026-10-31)
+
+**Evidence:** product draft #3, `docs/R4C-WINDOWS-PREFLIGHT.md`, runs 41095661097 and 41096590809. Codex showed that cmd cannot enforce the §13.3 byte grammar:
+- `set /p`, `FOR /F` and `FIND` read a trailing LF, a bare CR and a NUL identically;
+- `FINDSTR /p` accepts a NUL;
+- `FINDSTR /r` with a negated class hangs on a valid pointer.
+
+So the Windows wrappers delegate steps 1–4 of §13.3 to one **read-only** validator run by the system's Windows PowerShell. This amends §13.3 for Windows only. POSIX is unchanged.
+
+- **Which PowerShell.** Always the absolute path `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`, with `-NoLogo -NoProfile -NonInteractive -EncodedCommand <base64>`. It is never found through PATH and never `pwsh`.
+  - The script is generated at install and embedded in the `.cmd` as UTF-16LE base64. Execution policy does not apply to `-EncodedCommand`, and there is no separate `.ps1` file.
+  - The absolute `<root>` appears in the script exactly once, as a PowerShell single-quoted literal with `'` doubled. The script takes **no runtime arguments and reads no environment variable** except `SystemRoot`. It never sees the user's command-line arguments.
+- **What it does: read-only, in order.** It reads raw bytes with `[IO.File]::ReadAllBytes` and attributes with `[IO.File]::GetAttributes`. A `ReparsePoint` attribute counts as a symlink or junction.
+  1. Check `current` (step 1).
+  2. If `current` is exactly the bytes `uninstalling\n`, exit **10** silently (step 2).
+  3. Apply the full pointer and path grammar of §13.3 step 3, byte for byte.
+  4. Run `& <node> --version` once, and check that it falls in the supported range (step 4).
+  - It writes **no file** and makes no network call. It loads no module beyond what `-NoProfile` gives.
+- **Protocol back to cmd.** One stdout line on success, a fixed exit code otherwise:
+  - **exit 0:** stdout is exactly `<ver>|<absolute node path>`. `|` cannot occur in either part. cmd reads it with `FOR /F "usebackq tokens=1* delims=|"`, then runs `"<node>" "<root>\<ver>\product\src\cli.ts" %*` and propagates the exit code.
+  - **exit 1:** the validator has already written the exact §13.3 refusal line (not installed, damaged, or need Node) to stderr. cmd exits 1.
+  - **exit 10 (sentinel):**
+    - `trajecta.cmd` prints the native status text and exits 3 only when `%1` is exactly `uninstall`, `%2` is exactly `--status` and there is no `%3`. These argument tests use `"%~1"`. Command-line arguments are the user's own input, and the MCP wrapper never takes this branch.
+    - Every other case prints the §13.3 resume line and exits 1.
+  - **Any other exit code, or PowerShell missing, blocked or failing to start** (Constrained Language Mode, AppLocker, policy): fail closed with `trajecta: cannot validate the installation (Windows PowerShell unavailable or blocked)`, or the `<label>:` form for the MCP wrapper. Exit 1. Never fall back to a weaker cmd check.
+- **Unchanged.** No product or engine code and no Node module runs before exit 0. The only Node process started before then is the `--version` probe on the already validated path. The refusal texts, the sentinel precedence and the no-write rules are exactly §13.3. Node still starts after PowerShell has exited, so PowerShell is never a parent of the engine. Windows Ctrl-C evidence (§2.3) is unaffected, and is still observed through the `.cmd` wrapper.
+- **M5/M3 (Windows):**
+  - Codex's LF / CR / NUL fixtures and every §13.3 row are each refused or accepted exactly;
+  - a reparse-point `current`, a `<ver>` junction and a symlinked `node` file are each refused;
+  - an argv canary shows the validator never sees user arguments;
+  - PowerShell made unavailable (PATH emptied does not matter, because of the absolute path; simulated by a test-only `SystemRoot` pointing at an empty tree) fails closed;
+  - a `ConstrainedLanguage` session fails closed;
+  - the process tree at engine start contains no PowerShell;
+  - latency is recorded, and is not a gate.
