@@ -565,7 +565,7 @@ The wrappers (`bin/trajecta`, `bin/trajecta-mcp` and their `.cmd` twins) decide 
    - **`<root>/<ver>/node`** must be a regular file, not a symlink, holding exactly one LF-terminated absolute path with no control characters. The Node binary it names may itself be a symlink, such as Homebrew's: only the record file is checked.
    - **On Windows,** the `.cmd` wrappers apply the same grammar, for example with `findstr /r` anchored patterns plus a length check. If cmd cannot enforce it byte-exactly, Codex stops and reports with a repro, rather than weakening the check.
 4. **The recorded Node fails the version probe:** `trajecta: need Node 22.19+ or 24 LTS` (MCP: `<label>: need Node 22.19+ or 24 LTS`).
-5. **Otherwise:** POSIX `exec "<node>" "<root>/<ver>/product/src/cli.ts" …`. Windows runs the same command and propagates its exit code.
+5. **Otherwise:** POSIX `exec "<node>" "<root>/<ver>/product/src/cli.ts" "$@"` from `bin/trajecta`, and `exec "<node>" "<root>/<ver>/product/src/cli.ts" mcp "$@"` from `bin/trajecta-mcp`. The MCP wrapper always inserts the `mcp` verb (§13.2) before `<label> --engine …`; it never dispatches the label as a CLI verb. M5 asserts the exact argv on both OSes. Windows runs the same command and propagates its exit code.
 
 **M5/M3 add** one case per row, run on both POSIX and cmd. The sentinel case is run with Node absent too, to prove the precedence. Row 3 is covered by: `../x`, an absolute path, a drive-letter path, an empty file, one line, three lines, a CRLF line ending, an oversized file, `current` as a symlink, `<ver>` as a symlink or junction, and `<ver>/node` as a symlink. Each case must refuse as damaged, and a sentinel file proves that nothing outside `<root>` ran.
 
@@ -598,7 +598,7 @@ So the Windows wrappers delegate steps 1–4 of §13.3 to one **read-only** vali
   4. Run `& <node> --version` once, and check that it falls in the supported range (step 4).
   - It writes **no file** and makes no network call. It loads no module beyond what `-NoProfile` gives.
 - **Protocol back to cmd.** One stdout line on success, a fixed exit code otherwise:
-  - **exit 0:** stdout is exactly `<ver>|<absolute node path>`. `|` cannot occur in either part. cmd reads it with `FOR /F "usebackq tokens=1* delims=|"`, then runs `"<node>" "<root>\<ver>\product\src\cli.ts" %*` and propagates the exit code.
+  - **exit 0:** stdout is exactly `<ver>|<absolute node path>`. `|` cannot occur in either part. cmd reads it with `FOR /F "usebackq tokens=1* delims=|"`, then runs `"<node>" "<root>\<ver>\product\src\cli.ts" %*` from `trajecta.cmd`, or `"<node>" "<root>\<ver>\product\src\cli.ts" mcp %*` from `trajecta-mcp.cmd`, and propagates the exit code.
   - **exit 1:** the validator has already written the exact §13.3 refusal line (not installed, damaged, or need Node) to stderr. cmd exits 1.
   - **exit 10 (sentinel):**
     - `trajecta.cmd` prints the native status text and exits 3 only when `%1` is exactly `uninstall`, `%2` is exactly `--status` and there is no `%3`. These argument tests use `"%~1"`. Command-line arguments are the user's own input, and the MCP wrapper never takes this branch.
