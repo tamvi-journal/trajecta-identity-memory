@@ -466,3 +466,70 @@ Updates reuse the install machinery exactly: Phase A/B/C (§5.2), a versioned ro
 - **M8:** Ty's real-copy rehearsal, run on the release candidate by digest, producing the M8 receipt (12.1). The signing job refuses without it.
 
 R4b still owns Node bundling before any non-developer buyers.
+
+## 13. PR 4c preflight settlements (Codex S1–S3 @ 74f6475; Aux settlement 2026-10-30)
+
+These settle the three contract gaps Codex reported before writing any 4c code. They amend §2.4, §5.2 step 9–10, §5.3, §5.4 step 2 and §6 only where stated.
+
+### 13.1 S1: install destinations and the one external path
+
+- **Plugin destination.** Install Phase C step 10 builds exactly one plugin, for the profile named by `--profile`, at `<root>/plugins/trajecta-<safe profile>.plugin` (`safe_fs_name` as in R2d). With no `--profile`, step 10 writes nothing and prints `trajecta plugin --profile <name>`. The file is a **root-level `shared`** ledger entry: it survives version switches and is removed only by a full uninstall, when its hash still matches. A file already at that path that is not ledgered with a matching hash is left alone and reported (step 9 rule).
+- **`trajecta plugin`** takes `--profile <p>` (required), `--name <label>`, the R2e defaults flags (`--house`, `--data-dir`, `--profiles-dir`, `--work-root`) and `--out <file>`. Without `--out` it writes the same root-level path as above, under the install lock, ledgered `shared`. With `--out` it writes only that file (K2 atomic, temp file in the destination folder). That file is the user's own artifact: it is never ledgered and never removed by uninstall, and the command prints where it went.
+- **User-bin.** POSIX default `$HOME/.local/bin`; flags `--user-bin <absolute dir>` and `--no-user-bin`. Windows has **no** external copy: `<root>\bin` is the directory to put on PATH, and the installer prints that one line. The only external path install may create is `<user-bin>/trajecta`, a byte copy of `<root>/bin/trajecta`, plus the missing directories of `<user-bin>` that this run creates.
+  - The launcher templates embed the absolute `<root>` literally, so the copy and the original are identical bytes and neither infers the root from `$0`.
+  - **Plan first.** `.planned.json` lists the external file with its expected SHA-256, and the external directories that are missing at plan time.
+  - **Write.** Create each missing directory, shallowest first, and record it in the ledger entry's `created_dirs` immediately after each `mkdir` succeeds. Write `<user-bin>/.trajecta.<random>.tmp`, flush, rename onto `trajecta`, re-read, then ledger it. A file already there that is not ledgered with a matching hash is left alone and reported; it is never overwritten.
+  - **Ledger shape.** One `shared` entry with `kind: "external"`, the absolute path, its SHA-256 and `created_dirs` (absolute, in creation order). Generic outside-root entries stay forbidden: the ledger accepts an outside-root path only in this one shape, and only for `<user-bin>/trajecta`.
+  - **Crash.** A crash between a `mkdir` and its record can leak one empty directory. It is never removed later, because nothing proves this product created it. A leftover `.trajecta.*.tmp` in a recorded `<user-bin>` is removed by the next run, under the install lock.
+  - **Uninstall.** Full uninstall only (§5.4 step 4): unlink the external file only if its SHA-256 still matches, then `rmdir` the `created_dirs`, deepest first, each only if it is empty. A modified file is kept and reported, as for any shared path.
+- **Write-trace allowance (amends §2.4).** The product process may write only to: the install root; the planned `<user-bin>/trajecta`, its `.trajecta.*.tmp` siblings and the `created_dirs` this run records; the plugin output path of the current command; and engine-mediated store paths. Nothing else.
+
+### 13.2 S2: one product plugin, one shared MCP wrapper, recipe in argv
+
+- **Servers.** One product plugin per profile registers **two** MCP servers: `trajecta-identity-<safe profile>` (engine `identity`) and `trajecta-work-<safe profile>` (engine `work`). `--name <label>` overrides the identity label only; the work label is `<label>-work`.
+- **Recipe grammar.** `.mcp.json` calls the shared wrapper with:
+  `<root>/bin/trajecta-mcp <label> --engine identity|work [--default KEY VALUE]... -- <engine args>`
+  - `<label>` is the client-facing server name. It is used in the `<label>: need …` refusal and nothing else. Allowed characters are `[A-Za-z0-9._-]`, 1–64 of them.
+  - `KEY` is one of exactly `TRAJECTA_IDENTITY_DATA_DIR`, `TRAJECTA_IDENTITY_PROFILES`, `TRAJECTA_WORK_ROOT` and `TRAJECTA_HOME`. Any other key, a repeated key, or a missing `--` is a usage error (exit 2) before any import.
+  - Identity: `<engine args>` is `--profile <p>`. The defaults are rendered from the R2e flags, with `--work-root` producing `TRAJECTA_WORK_ROOT`.
+  - Work: `<engine args>` is empty, and `--work-root` produces `TRAJECTA_HOME`.
+  - Each key is defaulted independently. A preset value of one key never fills another.
+- **Applying defaults (K4).** The OS-native wrapper only routes and refuses (§13.3). It passes every argument unchanged to the product's `mcp` verb in Node.
+  - That verb applies each default **before** the in-process engine import. A key whose environment value is non-empty is left alone; an empty or absent key takes the default. This is P24 and `_sh_value` semantics.
+  - A value starting `~/` or `$HOME/` is expanded against `os.homedir()`. If that is empty, the verb writes `<label>: cannot resolve home folder for <KEY>` and exits 1. Any other value is used verbatim.
+  - Then it sets `process.argv` to the engine's MCP entry plus `<engine args>` and imports it in-process, through `engines.ts`, as in §2.3.
+  - `mcp` is not a pass-through verb. Its only observable effect before the import is these environment defaults.
+- **Windows argv safety.** `cmd.exe /d /c` re-parses arguments. So for a Windows target, `trajecta plugin` **refuses at build time** any label, default value or engine argument containing `% ! ^ & | < > " ( )`, a control character, or a trailing backslash. It refuses with a typed error naming the field, and writes nothing. POSIX targets accept any value, because `/bin/sh "$@"` forwards argv exactly.
+- **K1 (amended).** The product plugin carries `.claude-plugin/plugin.json`, `.mcp.json` and `skills/identity-continuity/`. The skill is copied byte for byte from the identity repo at the pinned engine SHA, never from an installed plugin. The plugin carries no executable: its launcher is the root wrapper, so `scripts/` is absent. A top-level `bin/` is still forbidden.
+- **K6 (scoped).** `plugin.json.version` equals the product version that built the plugin, and K6 is tested at build time. After `trajecta update` the plugin keeps working without a rebuild (§12.3 M5). `doctor` reports a built-version versus current-version difference as information, not as an error. 4d rebuilds the ledgered `<root>/plugins/*.plugin` files as part of an update. A `--out` artifact is the user's own and is not rebuilt.
+- **M5 additions.**
+  - Two plugins for the same root (profiles A and B, defaults `~/a` and `~/b` for the same key) run concurrently, and each sees its own value.
+  - A preset non-empty value wins for each of the four keys, independently.
+  - A preset empty value takes the default.
+  - The Windows build-time refusal is tested for each forbidden character.
+
+### 13.3 S3: wrapper routing and refusal precedence
+
+The wrappers (`bin/trajecta`, `bin/trajecta-mcp` and their `.cmd` twins) decide in this exact order. Every refusal goes to stderr and exits 1. None of these steps runs Node or product code.
+
+1. **`current` missing or unreadable:** `trajecta: not installed at <root>; run the installer`.
+2. **`current` line 1 is exactly `uninstalling`:** the sentinel takes precedence over every Node check.
+   - `trajecta uninstall --status`, with exactly those two arguments: the wrapper answers natively with the fixed text `trajecta: uninstall in progress at <root>` followed by the resume line below. It exits 3, a distinct code, so scripts can tell "in progress" from an error.
+   - Every other command, including `uninstall --resume` and every MCP start, refuses with the resume line:
+     `trajecta is being uninstalled; resume with the command printed by 'trajecta uninstall', or run the installer bootstrap with --resume-uninstall`.
+   - **Amends §5.4 step 2:** "allowed under the sentinel" means only through those two authenticated routes: the printed command with its embedded digest, and the hash-checked bootstrap. No local wrapper ever runs recovery code, and nothing on disk is used to choose an interpreter or to print a command. A resume command stored on disk would authenticate itself, so none is kept.
+3. **Line 1 names a version whose directory or `<ver>/node` file is missing:** `trajecta: installation at <root> is damaged; run the installer`.
+4. **The recorded Node fails the version probe:** `trajecta: need Node 22.19+ or 24 LTS` (MCP: `<label>: need Node 22.19+ or 24 LTS`).
+5. **Otherwise:** POSIX `exec "<node>" "<root>/<ver>/product/src/cli.ts" …`. Windows runs the same command and propagates its exit code.
+
+**M5/M3 add** one case per row, run on both POSIX and cmd. The sentinel case is run with Node absent too, to prove the precedence.
+
+### 13.4 Unchanged and binding
+
+The extractor gets a fixed decompression cap and a physical-header/entry cap, enforced before any staging write. Also unchanged:
+- sh `exec`;
+- adapter-only engine imports;
+- real Windows Ctrl-C evidence, or a declared limitation **after** observation;
+- every exact gate;
+- the empty production anchor;
+- the #47 writer-lifetime law.
