@@ -657,3 +657,47 @@ So the Windows wrappers delegate steps 1–4 of §13.3 to one **read-only** vali
   - the 240-character-root length fixture, plus a build-time refusal above 8000 characters;
   - the process tree at engine start contains no PowerShell;
   - latency is recorded, and is not a gate.
+
+### 13.6 PR 4c preflight S4 and S5 (Codex STOP @ b0d822b; Aux settlement 2026-10-31)
+
+**S4: what the release archive's `bin/` holds.** A release cannot contain rendered wrappers, because their bytes depend on `<root>` and, on Windows, on the pinned PowerShell path. Neither is known at build time (Codex rendered roots A and B and got different SHA-256s). So the archive carries **templates**, and install renders them, as §5.2 step 7 already says: "rendered from templates into staging". This amends §2.2.
+
+- **Archive layout.** `bin/templates/` holds exactly six files:
+  - `trajecta.sh.tmpl`
+  - `trajecta-mcp.sh.tmpl`
+  - `user-stub.sh.tmpl`
+  - `trajecta.cmd.tmpl`
+  - `trajecta-mcp.cmd.tmpl`
+  - `validator.ps1.tmpl`
+
+  They are listed in `MANIFEST.json` like every other file. They are root-independent and byte-deterministic, so two builds give identical tarballs. They are mode 0644: templates never execute.
+- **Release completeness (replaces "bin/ present and complete").** A build with `"artifact": "release"` refuses unless the six templates are present, and each contains exactly its documented placeholder set (below). A foundation artifact still has no `bin/`.
+- **Placeholders.** These are the only tokens. Each template declares the exact count of each token it contains, and the renderer checks those counts.
+  - `@@ROOT_SH@@` = `_sh_quote(<root>)` (POSIX templates).
+  - `@@ROOT_PS@@` = `<root>` as a PowerShell single-quoted literal, with `'` doubled (validator).
+  - `@@POWERSHELL@@` = the install-pinned absolute PowerShell path (§13.5), which is already validated as ASCII with no cmd-special characters (`.cmd` templates).
+  - `@@ENCODED_VALIDATOR@@` = the base64 UTF-16LE of the rendered `validator.ps1` (`.cmd` templates).
+- **Renderer.** It is a pure function in `product/src`.
+  - **Single pass, positional.** It splits the template on the token literals and joins the pieces with the values. A value is never scanned again, so a root that itself contains `@@ROOT_SH@@` cannot inject.
+  - **It refuses** with a typed error if any token count differs from the declaration, if any `@@` remains after rendering, or if a value fails its rule. The rules: the §13.5 checks for the PowerShell path, and for `<root>` the 8000-character limit on the `.cmd` line.
+  - **Output.** The rendered bytes go to staging in Phase A. Their SHA-256s go into `.planned.json`, and Phase C copies those exact bytes (§5.2 step 7). Rendered wrappers are ledgered root files at `<root>/bin/`.
+- **Tests (M2/M3/M5).**
+  - Two release builds are byte-identical.
+  - Rendering roots A and B gives different bytes, and each matches the expected output exactly (golden files with the placeholders filled).
+  - A root containing a token literal, `'`, `"`, `$`, `` ` `` or whitespace renders safely.
+  - A missing template, an extra token or a leftover `@@` each make the build or the install refuse.
+  - The release completeness refusal is exercised.
+
+**S5: a custom `--db` must reach the MCP recipe.** `install --profile example --db <temp>/identity/custom.sqlite3` bootstraps that file. A profile-only recipe would then open the engine's default `<data dir>/example.sqlite3`, so the plugin would show a different, uninitialized store. The frozen identity MCP entry already accepts `--db` (`node/src/mcp.ts`, `argumentsFrom`), so no engine change is needed.
+
+- **Recipe (amends §13.2).** The identity `<engine args>` are `--profile <p>`, followed by `--db <absolute path>` when a database path was given. Work args are unchanged.
+- **Where the path comes from.**
+  - Install step 10 uses the install's `--db`, resolved to an absolute path, when one was given.
+  - `trajecta plugin` gains `--db <path>`, also resolved to an absolute path.
+  - Without `--db`, the recipe stays profile-only, and the engine's own default resolution applies at run time, honoring `TRAJECTA_IDENTITY_DATA_DIR`.
+- **Precedence is the engine's.** An explicit `--db` in the recipe wins over `TRAJECTA_IDENTITY_DATA_DIR`. That is the frozen engine behavior, unchanged. The `--data-dir` default still applies to everything else the engine reads from it.
+- **Safety.** For a Windows target, the `--db` value goes through the same build-time refusal as every other recipe argument (§13.2). On POSIX it is forwarded exactly.
+- **M5 additions.**
+  - The install `--db custom` case: the plugin's MCP `initialize` plus `identity_status` show the custom store, initialized, with the same path the CLI reports.
+  - A profile-only plugin with `TRAJECTA_IDENTITY_DATA_DIR` set resolves the default name under that directory.
+  - A Windows `--db` containing a cmd-special character is refused at build time.
