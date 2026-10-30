@@ -475,57 +475,38 @@ These settle the three contract gaps Codex reported before writing any 4c code. 
 
 - **Plugin destination.** Install Phase C step 10 builds exactly one plugin, for the profile named by `--profile`, at `<root>/plugins/trajecta-<safe profile>.plugin` (`safe_fs_name` as in R2d). With no `--profile`, step 10 writes nothing and prints `trajecta plugin --profile <name>`. The file is a **root-level `shared`** ledger entry: it survives version switches and is removed only by a full uninstall, when its hash still matches. A file already at that path that is not ledgered with a matching hash is left alone and reported (step 9 rule).
 - **`trajecta plugin`** takes `--profile <p>` (required), `--name <label>`, the R2e defaults flags (`--house`, `--data-dir`, `--profiles-dir`, `--work-root`) and `--out <file>`. Without `--out` it writes the same root-level path as above, under the install lock, ledgered `shared`. With `--out` it writes only that file (K2 atomic, temp file in the destination folder). That file is the user's own artifact: it is never ledgered and never removed by uninstall, and the command prints where it went.
-- **User-bin.** POSIX default `$HOME/.local/bin`; flags `--user-bin <absolute dir>` and `--no-user-bin`. Windows has **no** external copy: `<root>\bin` is the directory to put on PATH, and the installer prints that one line. The only external path install may create is `<user-bin>/trajecta`, a byte copy of `<root>/bin/trajecta`, plus the missing directories of `<user-bin>` that this run creates.
-  - The launcher templates embed the absolute `<root>` literally, so the copy and the original are identical bytes and neither infers the root from `$0`.
-  - **Plan first.** `.planned.json` lists the external file with its expected SHA-256, and the external directories that are missing at plan time.
-  - **External journal (Lam R48-1).** Outside-root effects are receipted **before** they happen, in `<root>/external.json`. It is written as a tmp file, fsynced and renamed, and only while the install lock is held. Each record is **independent**: one per directory, one per temp file, and one for the launcher. No record claims a file that does not exist.
-    - **Directory.** Write the record `{dir, state: "intent"}`. Then `mkdir`, never recursive, one level at a time, shallowest first.
-      - `EEXIST`: the directory was not ours, so drop the record.
-      - Success: rewrite the record as `{dir, state: "created"}` and fsync the parent.
-      - Only `created` records become `shared` ledger entries of `kind: "external-dir"`.
-      - Crash between `mkdir` and `created`: the next run finds an `intent` record whose directory exists. Nothing proves this product created it, so the directory is **retained** and reported, never removed, and the record is dropped.
-    - **Temp file (Lam R48-3).** An `intent` proves nothing about who created a file. Only a `created` receipt, written after this process's own exclusive create succeeded, proves ownership.
-      1. Write the record `{tmp: <user-bin>/.trajecta.<128-bit random>.tmp, state: "intent"}`.
-      2. Create that exact path with exclusive create (`wx`, `O_CREAT|O_EXCL|O_NOFOLLOW`).
-         - **`EEXIST`:** drop the record, claim nothing, report, and retry with a fresh name.
-      3. Immediately `fstat` the open descriptor. Rewrite the record as `{tmp, dev, ino, sha256: <planned launcher SHA-256>, state: "created"}`, and fsync the journal before writing any byte to the file.
-      4. Write the bytes and flush.
-      - **Crash between `wx` and the `created` receipt:** the file is unproved. It is **retained** and reported, never deleted, and the `intent` record is dropped.
-      - **On a later run, a temp file is removed only if** its record is `created`, `lstat` shows a regular file at exactly that path whose `dev`/`ino` equal the receipt, and its bytes are a prefix of, or equal to, the planned launcher bytes.
-      - **Anything else is retained and reported:** a file with a different inode at that path, one with foreign bytes, an `intent`-only record, or a name with no record.
-      - Nothing is ever deleted because its name matches a pattern.
-    - **Launcher publication (Lam R48-4).** It is never a plain `rename` onto the destination.
-      - **Absent or unowned destination:** publish with `link(tmp, <user-bin>/trajecta)`, which fails atomically with `EEXIST` and never replaces anything.
-        - On success, re-read the destination, check its `dev`/`ino` equal the temp file's and its hash equals the plan, ledger it as `kind: "external"` with `dev`/`ino`, then unlink the temp file under the temp rule.
-        - On `EEXIST`, a file appeared that is not ours. Its bytes are never touched. Install reports it and refuses this step, and the temp file is removed under the temp rule.
-        - If the filesystem refuses hard links (`EPERM`, `ENOTSUP`, `EXDEV`), the step fails closed with a typed error that suggests `--no-user-bin`.
-      - **Destination already ledgered, current hash matching the ledger, and planned bytes equal:** a no-op. Nothing is written.
-      - **Destination already ledgered, planned bytes differ (a newer template):** a journaled move-aside, never an overwrite.
-        1. Record `{aside: <user-bin>/.trajecta.<random>.old, state: "intent"}`.
-        2. `rename(trajecta, aside)`.
-        3. Verify that the moved file's `dev`/`ino` and hash equal the ledger entry.
-           - **If they match:** mark the aside `created` (it is our file), publish the new temp file with `link` as above, then unlink the aside.
-           - **If they do not match:** it was a foreign file swapped in. Put it back with `link(aside, trajecta)`, which never replaces anything. If that link meets `EEXIST`, leave the file at the aside name. Either way, report, and never delete it.
-      - Windows creates no external copy (§13.1), so this protocol is POSIX only.
-      - **M3 (R48-3/R48-4):**
-        - intent, then a foreign process creates the recorded temp path, empty and as an exact prefix, then `wx` meets `EEXIST`, and a kill: the foreign file is retained;
-        - a kill between `wx` and `created`: the file is retained;
-        - an inode swap of a `created` temp file: it is retained;
-        - a competing process creates `<user-bin>/trajecta` between the pre-check and `link`: its bytes are unchanged and install refuses and reports;
-        - a foreign swap at the destination during move-aside: it is restored or retained, never deleted;
-        - a no-hard-link filesystem: a typed refusal.
-    - Generic outside-root entries stay forbidden. The ledger accepts outside-root paths only in these two kinds: the one file `<user-bin>/trajecta` and the directories with `created` receipts.
-  - **Uninstall.** Full uninstall only (§5.4 step 4):
-    1. Unlink the external launcher only if its `dev`/`ino` and SHA-256 still match the ledger.
-    2. Remove recorded temp files under the rule above.
-    3. `rmdir` the `external-dir` entries, deepest first, each only if it is empty.
-    - Anything else is retained and reported, as for any shared path. Uninstall finalizes with `external.json` removed only after it holds no record.
-  - **M3 additions.**
-    - A kill after every journal write, `mkdir` and rename boundary, with re-run convergence.
-    - A temp file the product does not own (a matching name with no record, and a recorded name with foreign bytes) is retained across retry and uninstall.
-    - A directory that appears between `intent` and `mkdir` (`EEXIST`) is never ledgered and never removed.
-    - A crash after `mkdir` but before `created` retains the directory.
-- **Write-trace allowance (amends §2.4).** The product process may write only to: the install root; the planned `<user-bin>/trajecta`, the temp files and directories this run journals in `external.json` (and removals under the rules above); the plugin output path of the current command; and engine-mediated store paths. Nothing else.
+- **User-bin (redesigned after Lam R48-1…R48-6).** The product **never deletes, renames over or replaces anything outside `<root>`**, and never creates an outside-root directory. Every outside-root cleanup or replacement the earlier drafts tried had a check-then-act seam, so the external surface is cut down to one no-replace create. Nothing outside the root ever needs cleaning up automatically.
+  - **Where.** POSIX default `$HOME/.local/bin`; flags `--user-bin <absolute dir>` and `--no-user-bin`. Windows has **no** external file: `<root>\bin` is the directory to put on PATH, and the installer prints that one line.
+    - If the user-bin directory does not exist, or is not a real directory (a symlink is fine only if it resolves to a directory the user owns), the step is skipped. The installer prints the PATH line for `<root>/bin` instead.
+  - **What.** A fixed **stub** that never needs updating, because it embeds only the absolute root:
+    ```sh
+    #!/bin/sh
+    [ -f '<root>/bin/trajecta' ] || { echo "trajecta: not installed at <root>; run the installer, or remove $0" >&2; exit 1; }
+    exec /bin/sh '<root>/bin/trajecta' "$@"
+    ```
+    - `<root>` is quoted with `_sh_quote`, and the stub contains no other variable data. The `exec` keeps one process, because the root launcher then `exec`s Node.
+    - A template change in a later product version changes only `<root>/bin/trajecta`, which lives inside the root. The stub's bytes are the same for every version with that root.
+  - **How (the only outside-root write).**
+    - The stub is staged **inside the root** as `<root>/bin/.user-stub`, a normal ledgered root file.
+    - It is published with `link(<root>/bin/.user-stub, <user-bin>/trajecta)`. `link` is atomic and never replaces anything.
+    - **`EEXIST`:** if the existing file's bytes equal the stub, it is a no-op and is reported as present. Otherwise the file is not ours: it is left untouched and reported, together with the PATH line for `<root>/bin`.
+    - **`EXDEV`, `EPERM` or `ENOTSUP`** (no hard link possible): the step is skipped, with the same report and PATH line.
+    - There is no temp file outside the root, no `mkdir` outside the root, no rename and no journal. A crash at any point leaves either nothing outside the root or a correct stub. Either converges on re-run, because a stub with equal bytes is a no-op.
+  - **Ledger.** `owned.json` records the external path with `kind: "external-report"` and its `dev`/`ino`. That record is used **only to report**. It grants no authority to delete or modify.
+  - **Uninstall** never touches the external file. A full uninstall prints:
+    `trajecta: left <user-bin>/trajecta in place; remove it yourself if you no longer want it`.
+    - If the stub runs after the root is gone, it prints its own refusal and exits 1.
+    - Removing a file outside the root is the owner's action. The product never claims a foreign swap is harmless, because it never acts on that path a second time.
+  - **M3:**
+    - an absent user-bin directory, which is skipped and nothing is created;
+    - a foreign `<user-bin>/trajecta`, before install and created concurrently just before `link`, whose bytes stay unchanged;
+    - an equal-bytes stub, which is a no-op;
+    - an `EXDEV` user-bin on another filesystem, which is skipped;
+    - a kill on each side of the `link`, after which a re-run converges;
+    - a full uninstall that leaves the external file and prints the line;
+    - the stub after uninstall, which refuses and exits 1;
+    - the process tree through the stub, which shows a single Node process.
+- **Write-trace allowance (amends §2.4).** The product process may write only to: the install root; the one hard link `<user-bin>/trajecta` created by `link()` (never a write through it, never a removal); the plugin output path of the current command; and engine-mediated store paths. Nothing else.
 
 ### 13.2 S2: one product plugin, one shared MCP wrapper, recipe in argv
 
