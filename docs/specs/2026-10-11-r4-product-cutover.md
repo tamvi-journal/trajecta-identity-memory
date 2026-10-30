@@ -677,6 +677,18 @@ So the Windows wrappers delegate steps 1–4 of §13.3 to one **read-only** vali
   - `@@ROOT_PS@@` = `<root>` as a PowerShell single-quoted literal, with `'` doubled (validator).
   - `@@POWERSHELL@@` = the install-pinned absolute PowerShell path (§13.5), which is already validated as ASCII with no cmd-special characters (`.cmd` templates).
   - `@@ENCODED_VALIDATOR@@` = the base64 UTF-16LE of the rendered `validator.ps1` (`.cmd` templates).
+- **Canonical placeholder table (Lam P2).** The template set and these exact counts live in one product source constant. The build, the renderer and the tests all read it. Every token not listed for a template has count 0.
+
+  | Template | `@@ROOT_SH@@` | `@@ROOT_PS@@` | `@@POWERSHELL@@` | `@@ENCODED_VALIDATOR@@` |
+  |---|---|---|---|---|
+  | `trajecta.sh.tmpl` | 1 | 0 | 0 | 0 |
+  | `trajecta-mcp.sh.tmpl` | 1 | 0 | 0 | 0 |
+  | `user-stub.sh.tmpl` | 1 | 0 | 0 | 0 |
+  | `trajecta.cmd.tmpl` | 0 | 0 | 1 | 1 |
+  | `trajecta-mcp.cmd.tmpl` | 0 | 0 | 1 | 1 |
+  | `validator.ps1.tmpl` | 0 | 1 | 0 | 0 |
+- **Platform selection.** A POSIX install renders only the three `.sh` templates. It never resolves or pins PowerShell, and never touches the Windows templates. A Windows install renders only `validator.ps1` and the two `.cmd` templates, and has no user stub (§13.1).
+- **Modes.** Rendered POSIX launchers and the stub are written 0755, and M5 runs them directly. Rendered `.cmd` files are 0644. The archived `.tmpl` files stay 0644.
 - **Renderer.** It is a pure function in `product/src`.
   - **Single pass, positional.** It splits the template on the token literals and joins the pieces with the values. A value is never scanned again, so a root that itself contains `@@ROOT_SH@@` cannot inject.
   - **It refuses** with a typed error if any token count differs from the declaration, if any template literal segment contains `@@`, or if a value fails its rule.
@@ -699,6 +711,30 @@ So the Windows wrappers delegate steps 1–4 of §13.3 to one **read-only** vali
   - Without `--db`, the recipe stays profile-only, and the engine's own default resolution applies at run time, honoring `TRAJECTA_IDENTITY_DATA_DIR`.
 - **Precedence is the engine's.** An explicit `--db` in the recipe wins over `TRAJECTA_IDENTITY_DATA_DIR`. That is the frozen engine behavior, unchanged. The `--data-dir` default still applies to everything else the engine reads from it.
 - **Safety.** For a Windows target, the `--db` value goes through the same build-time refusal as every other recipe argument (§13.2). On POSIX it is forwarded exactly.
+- **Durable recipe record (Lam P1 @ cb05f63).** Every ledgered plugin `<root>/plugins/<name>.plugin` has a sibling `<root>/plugins/<name>.recipe.json`. It is a ledgered root file of scope `shared`, and it is the **only** source a later rebuild may use.
+  - **Content.** Canonical JSON (R0 writer), holding: `schema: "trajecta.plugin-recipe/v1"`; `target` (`posix` or `windows`); `profile`; `name` (the label override, or `null`); `db` (absolute, or `null`); `defaults` (a map containing only the four §13.2 keys); and `plugin_sha256`, the SHA-256 of the exact `.plugin` bytes built from this recipe.
+  - **Writing.** Install step 10 and `trajecta plugin` without `--out` build both files under the install lock.
+    1. Stage both, and record both expected SHA-256s in the plan.
+    2. Rename the `.plugin` into place, then the `.recipe.json`.
+    3. Re-read each one and ledger it.
+    - An existing ledgered pair is replaced only if both current hashes match the ledger. Otherwise the command refuses and leaves the files untouched (no foreign mutation).
+    - After a crash, re-running the same command converges through the normal plan adoption: files whose bytes match the plan are adopted.
+  - **`trajecta plugin --db second.sqlite3`** replaces the pair, so the record always describes the **last successfully accepted** recipe. It never falls back to the install's first `--db`.
+  - **`--out` artifacts** have no recipe record and are never rebuilt.
+- **Update rebuild (binds 4d).** For each ledgered plugin, `trajecta update` rebuilds **only if** all three hold:
+  - the `.plugin` hash matches the ledger;
+  - the `.recipe.json` hash matches the ledger;
+  - the record's `plugin_sha256` equals the ledgered `.plugin` hash.
+  It then rebuilds from that record **verbatim**, with the new product version, and replaces the pair under the rules above.
+  - It never recomputes a recipe from profile defaults or from install arguments.
+  - **Fail closed.** If any check fails, or the record is missing or does not parse, the update skips that plugin, leaves both files byte-identical, and reports `trajecta: plugin <name> not rebuilt (recipe record missing or modified); run trajecta plugin --profile … to rebuild it`. The update itself still succeeds, because the existing plugin keeps working through the wrapper (§12.3 M5).
+- **M5/M3 (P1):**
+  - install with `--db custom`, then MCP status, then update with rebuild, then status: still the same custom store;
+  - `trajecta plugin --db second.sqlite3`, then update, then status: stays on the second store;
+  - the default `example.sqlite3` is never opened in either case;
+  - a tampered recipe record, a tampered plugin, and a `plugin_sha256` mismatch are each skipped and reported, with both files unchanged;
+  - a kill on each side of each rename converges on re-run;
+  - an `--out` artifact is untouched by update.
 - **M5 additions.**
   - The install `--db custom` case: the plugin's MCP `initialize` plus `identity_status` show the custom store, initialized, with the same path the CLI reports.
   - A profile-only plugin with `TRAJECTA_IDENTITY_DATA_DIR` set resolves the default name under that directory.
