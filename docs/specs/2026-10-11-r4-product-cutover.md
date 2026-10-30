@@ -679,13 +679,15 @@ So the Windows wrappers delegate steps 1–4 of §13.3 to one **read-only** vali
   - `@@ENCODED_VALIDATOR@@` = the base64 UTF-16LE of the rendered `validator.ps1` (`.cmd` templates).
 - **Renderer.** It is a pure function in `product/src`.
   - **Single pass, positional.** It splits the template on the token literals and joins the pieces with the values. A value is never scanned again, so a root that itself contains `@@ROOT_SH@@` cannot inject.
-  - **It refuses** with a typed error if any token count differs from the declaration, if any `@@` remains after rendering, or if a value fails its rule. The rules: the §13.5 checks for the PowerShell path, and for `<root>` the 8000-character limit on the `.cmd` line.
+  - **It refuses** with a typed error if any token count differs from the declaration, if any template literal segment contains `@@`, or if a value fails its rule.
+    - All of these are checked on the **template**, before any value is inserted (Codex review). The template is split on the four token literals; every literal segment between them must be free of `@@`, so an unknown or malformed token is caught in the template itself.
+    - The rendered output is **never** scanned for `@@`. A legitimate root such as `/tmp/@@ROOT_SH@@` therefore renders, and stays inert inside its quoted value. The rules: the §13.5 checks for the PowerShell path, and for `<root>` the 8000-character limit on the `.cmd` line.
   - **Output.** The rendered bytes go to staging in Phase A. Their SHA-256s go into `.planned.json`, and Phase C copies those exact bytes (§5.2 step 7). Rendered wrappers are ledgered root files at `<root>/bin/`.
 - **Tests (M2/M3/M5).**
   - Two release builds are byte-identical.
   - Rendering roots A and B gives different bytes, and each matches the expected output exactly (golden files with the placeholders filled).
   - A root containing a token literal, `'`, `"`, `$`, `` ` `` or whitespace renders safely.
-  - A missing template, an extra token or a leftover `@@` each make the build or the install refuse.
+  - A missing template, an extra token, or an unknown `@@…@@` in a template literal segment each make the build or the install refuse. A root containing `@@ROOT_SH@@` renders, and its golden output matches exactly.
   - The release completeness refusal is exercised.
 
 **S5: a custom `--db` must reach the MCP recipe.** `install --profile example --db <temp>/identity/custom.sqlite3` bootstraps that file. A profile-only recipe would then open the engine's default `<data dir>/example.sqlite3`, so the plugin would show a different, uninitialized store. The frozen identity MCP entry already accepts `--db` (`node/src/mcp.ts`, `argumentsFrom`), so no engine change is needed.
