@@ -604,11 +604,17 @@ So the Windows wrappers delegate steps 1–4 of §13.3 to one **read-only** vali
   1. Apply §13.3 step 1 in full: a missing `current` is `NOTINSTALLED`; a non-regular file, a reparse point or more than 256 bytes is `DAMAGED`. This happens before any byte is interpreted.
   2. Recognize the exact sentinel bytes `uninstalling\n` (step 2).
   3. Apply the full step 3 grammar, byte for byte, including the `<ver>\node` file.
-  4. **Probe Node (Lam P2).** Run `<node> --version` once through `System.Diagnostics.Process`:
-     - `UseShellExecute = false`, with stdin, stdout and stderr all redirected;
-     - both output streams read to the end asynchronously;
-     - a 10-second timeout, after which the process is killed.
-     Nothing the probe writes, on either stream, ever reaches the wrapper's stdout or stderr. A timeout, a non-zero exit or an out-of-range version is `ERR|NODE` (step 4).
+  4. **Probe Node (Lam P2 @ 8cd61f4 and @ d35cdad).** Run `<node> --version` once through `System.Diagnostics.Process`:
+     - `UseShellExecute = false`, with stdin, stdout and stderr all redirected and stdin closed immediately;
+     - both output streams read with `ReadToEndAsync` into tasks the validator owns. Their content is used only to parse the version.
+     - **Bounded wait.** `WaitForExit(10000)`. If the probe has not exited, call `Kill()` and treat the result as a timeout.
+     - **Bounded drain.** Then wait at most a further 2000 ms for both read tasks (`Task.WaitAll` with a timeout). A descendant of a fake Node can keep an inherited pipe handle open after its parent dies, so the validator never waits on the tasks without that bound.
+     - After the drain bound, it disposes the `Process` object, which closes its own ends of the pipes, and abandons any pending task.
+     - It writes its single record and calls `[Environment]::Exit(0)`, so threads still pending cannot delay the wrapper.
+     - Worst-case wall time for the probe is therefore about 12 seconds.
+     - A start failure (`Win32Exception`), a kill failure, a read failure, a timeout, a non-zero exit, an output that does not parse or an out-of-range version is `ERR|NODE`.
+     - A descendant that the probed binary spawned is not owned by the validator, and may outlive it. The validator never waits on it and never reads from it again.
+     - Nothing the probe writes reaches the wrapper's stdout or stderr (step 4).
   - It writes no file and makes no network call.
 - **Protocol: one ASCII stdout record carries both status and data (Lam P1-1).** cmd never relies on `ERRORLEVEL` after `FOR /F`. The validator always exits 0. It writes its whole stdout with a single `[Console]::Out.Write`: exactly one record, framed as `TRJ1|<body>|END` and ending in CRLF. `<body>` is one of:
   - `OK|<ver>|<node>`. `<ver>` is ASCII by grammar. `<node>` is the recorded absolute path if it is printable ASCII without `% ! ^ & | < > " ( )`. Otherwise it is that file's 8.3 short path from `GetShortPathName`, if one exists and passes the same test.
@@ -616,14 +622,17 @@ So the Windows wrappers delegate steps 1–4 of §13.3 to one **read-only** vali
   - `ERR|NOTINSTALLED`, `ERR|DAMAGED`, `ERR|NODE` or `ERR|NODEPATH`. `NODEPATH` means the recorded Node path is valid but has no cmd-safe ASCII form on this volume.
   - Output is forced to ASCII with `[Console]::OutputEncoding = [Text.Encoding]::ASCII`, and only these bytes are written. Any other stdout is impossible by construction.
 - **cmd side: the parser's exact acceptance contract (Lam P2).**
-  1. **Records.** A first `FOR /F "usebackq delims= eol=|"` reads whole lines, with no token splitting. `eol=|` is used because no record can start with `|`. It counts the records and keeps the last one.
-     - **Blank lines are invisible to `FOR /F`** and carry no data. The validator never writes one, so a blank line is not a channel and is not counted.
-     - Every non-blank line is counted, including lines starting with `;`, because `eol` is not `;`.
-     - The count must be exactly 1.
+  - **Trust model (Lam P1 @ d35cdad).** stdout is written only by the pinned system PowerShell running the embedded script under `-NoProfile`, in one `Write` of a fixed-grammar string. It is not an adversarial channel. The checks below are an exact acceptance contract over **observable** lines, a defence in depth against corruption, and they do not claim to detect lines that `FOR /F` cannot observe.
+  1. **Records.** A first `FOR /F "usebackq delims= eol=` + "`" + `"` reads whole lines, with no token splitting.
+     - The `eol` character is the backtick, which the validator never writes. `FOR /F` skips blank lines and lines starting with a backtick. Those are **unobservable**, carry no data, and the validator never writes them.
+     - Every other line is counted, including lines starting with `;` or `|`. The count must be exactly 1. The full line is kept in a variable.
   2. **Fields.** A second `FOR /F "tokens=1-5* delims=|"` splits the kept record.
      - Token 1 must be `TRJ1`.
      - The last field must be `END`, the field count must match the status exactly (`OK` has five fields; `SENTINEL` three; `ERR` four), and the remainder `*` must be empty.
-     - A missing field, a fourth field where three are expected, a doubled `|` (empty fields collapse in `FOR /F`, so a record whose field count changes fails this check), an unknown status, or a missing `END` is rejected.
+     - **Canonical reconstruction (the authoritative check).** `FOR /F` collapses adjacent delimiters, so token counting is not injective (Lam's counterexample: `TRJ1|OK||0.5.0|C:\node.exe|END`). cmd therefore rebuilds the canonical wire for the selected state from the parsed tokens, for example `TRJ1|OK|!v!|!n!|END` or `TRJ1|ERR|!c!|END`. It requires that string to equal the kept full line exactly, using a case-sensitive `if "!line!"=="!canon!"` under local delayed expansion.
+     - Every token must also be non-empty and match its grammar: the version grammar, the `ERR` category list, and the Node path rule.
+     - So an extra, doubled, leading or trailing `|` is rejected, as are a missing or extra field, an unknown status and a missing `END`.
+     - Delayed expansion is enabled only around this comparison, and the values never contain `!`, because the Node path rule excludes it.
   3. **Fail closed.** Any rejection, zero records, two or more records, PowerShell missing, or PowerShell blocked (Constrained Language Mode, AppLocker, policy) means `<prefix>: cannot validate the installation (Windows PowerShell unavailable or blocked)` and exit 1. There is never a fallback to a weaker cmd check.
   - **The wrapper formats every message itself (Lam P1-2).** `<prefix>` is `trajecta` for `trajecta.cmd` and `%~1` (the server label) for `trajecta-mcp.cmd`. The messages are the exact §13.3 texts: not installed, damaged, need Node, and the resume line. `NODEPATH` prints `<prefix>: the recorded Node path has no usable short form on this system; reinstall with Node at an ASCII path`. Every refusal exits 1.
   - **Argv safety on Windows.** The MCP wrapper's arguments come from the plugin recipe, whose labels, defaults and engine arguments are refused at build time if they contain any cmd-special character (§13.2). A manual invocation is the invoking user's own command line. The validator never sees argv.
@@ -634,7 +643,9 @@ So the Windows wrappers delegate steps 1–4 of §13.3 to one **read-only** vali
   - Codex's LF / CR / NUL fixtures and every §13.3 row are each refused or accepted exactly, through both wrappers;
   - the outcomes `OK`, `SENTINEL` and each `ERR`, including status exit 3 with Node missing;
   - a reparse-point `current` whose target holds the exact sentinel gives `ERR|DAMAGED`, with no Node and no status exit 3 (POSIX: a symlinked `current`, the same result);
-  - framing faults fed through a test-only validator stub are each refused: an extra `;` line, two records, a fourth field, a missing field, a missing `END`, `||`, a wrong magic;
+  - framing faults fed through a test-only validator stub are each refused: an extra `;` line, an extra `|junk` line (now counted), two records, a fourth field, a missing field, a missing `END`, a wrong magic, and Lam's exact `TRJ1|OK||0.5.0|C:\node.exe|END` (refused by reconstruction);
+  - an extra backtick-leading line is documented as unobservable, and the test asserts that this is the only skipped form;
+  - a fake Node that spawns a descendant holding the redirected pipes open, then hangs or is killed: the wrapper returns the `need Node` refusal within the bound (about 12 seconds) with no leaked bytes;
   - a fake `node` that writes to stderr and exits non-zero, and one that hangs: exactly the wrapper's refusal appears, with none of the fake's bytes and no hang beyond the timeout;
   - MCP labels appear in the refusals of two concurrently configured servers;
   - a reparse-point `current`, a `<ver>` junction and a symlinked `node` file are each refused;
