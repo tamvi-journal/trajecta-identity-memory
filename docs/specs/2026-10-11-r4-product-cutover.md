@@ -623,7 +623,7 @@ So the Windows wrappers delegate steps 1–4 of §13.3 to one **read-only** vali
   - Output is forced to ASCII with `[Console]::OutputEncoding = [Text.Encoding]::ASCII`, and only these bytes are written. Any other stdout is impossible by construction.
 - **cmd side: the parser's exact acceptance contract (Lam P2).**
   - **Trust model (Lam P1 @ d35cdad).** stdout is written only by the pinned system PowerShell running the embedded script under `-NoProfile`, in one `Write` of a fixed-grammar string. It is not an adversarial channel. The checks below are an exact acceptance contract over **observable** lines, a defence in depth against corruption, and they do not claim to detect lines that `FOR /F` cannot observe.
-  1. **Records.** A first `FOR /F "usebackq delims= eol=` + "`" + `"` reads whole lines, with no token splitting.
+  1. **Records.** A first `FOR /F` with options `usebackq delims=` and `eol=` set to the backtick character reads whole lines, with no token splitting.
      - The `eol` character is the backtick, which the validator never writes. `FOR /F` skips blank lines and lines starting with a backtick. Those are **unobservable**, carry no data, and the validator never writes them.
      - Every other line is counted, including lines starting with `;` or `|`. The count must be exactly 1. The full line is kept in a variable.
   2. **Fields.** A second `FOR /F "tokens=1-5* delims=|"` splits the kept record.
