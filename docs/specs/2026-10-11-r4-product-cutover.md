@@ -588,28 +588,43 @@ The extractor gets a fixed decompression cap and a physical-header/entry cap, en
 
 So the Windows wrappers delegate steps 1–4 of §13.3 to one **read-only** validator run by the system's Windows PowerShell. This amends §13.3 for Windows only. POSIX is unchanged.
 
-- **Which PowerShell.** Always the absolute path `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`, with `-NoLogo -NoProfile -NonInteractive -EncodedCommand <base64>`. It is never found through PATH and never `pwsh`.
-  - The script is generated at install and embedded in the `.cmd` as UTF-16LE base64. Execution policy does not apply to `-EncodedCommand`, and there is no separate `.ps1` file.
-  - The absolute `<root>` appears in the script exactly once, as a PowerShell single-quoted literal with `'` doubled. The script takes **no runtime arguments and reads no environment variable** except `SystemRoot`. It never sees the user's command-line arguments.
+- **Which PowerShell (Lam P1-3).**
+  - The installer resolves the system PowerShell **once, at install time**, as `<SystemRoot>\System32\WindowsPowerShell\v1.0\powershell.exe`, and writes that absolute path into the `.cmd` as a **literal**. At run time the wrappers never expand `%SystemRoot%`, PATH or `pwsh`.
+  - **Install-time checks:** the path is a regular file, not a reparse point; it is ASCII; it has no `% ! ^ & | < > " ( )`; and `SystemRoot` and `windir` agree. Otherwise install refuses with a typed error.
+  - **Threat boundary, stated:** the wrappers inherit their caller's environment. An actor who controls that environment can already run code in every Node process through `NODE_OPTIONS`, and in cmd through `COMSPEC`/`PATHEXT`, so a hostile inherited environment is outside what any wrapper can defend. Pinning removes the one pre-validation executable lookup the wrappers themselves would make.
+  - **M5 canary:** at run time, `SystemRoot` points at a tree containing a fake `powershell.exe` that writes a marker. The marker must never appear.
+- **Invocation.** `<pinned powershell.exe> -NoLogo -NoProfile -NonInteractive -EncodedCommand <base64>`.
+  - The script is generated at install and embedded as UTF-16LE base64, so a non-ASCII `<root>` is carried losslessly. There is no `.ps1` file, and execution policy does not apply.
+  - `<root>` appears in the script exactly once, as a PowerShell single-quoted literal with `'` doubled.
+  - **Inputs.** The validator reads exactly one environment variable, `TRAJECTA_WRAPPER_DIR`, which the wrapper sets on the line before the call with `set "TRAJECTA_WRAPPER_DIR=%~dp0"`, overwriting any inherited value. It never receives user argv. If that directory, normalized with `GetFullPath` and compared ordinal-ignore-case, is not `<root>\bin\`, the result is `DAMAGED`. A moved or copied `.cmd` can never run a different tree's `cli.ts`.
+  - **Length limit.** The complete `.cmd` line that carries the encoded command must be at most 8000 characters, under cmd's 8191 limit. This is checked at build time with a typed refusal, never truncated. A long-root fixture (a 240-character non-ASCII root) is in M5.
 - **What it does: read-only, in order.** It reads raw bytes with `[IO.File]::ReadAllBytes` and attributes with `[IO.File]::GetAttributes`. A `ReparsePoint` attribute counts as a symlink or junction.
-  1. Check `current` (step 1).
-  2. If `current` is exactly the bytes `uninstalling\n`, exit **10** silently (step 2).
-  3. Apply the full pointer and path grammar of §13.3 step 3, byte for byte.
-  4. Run `& <node> --version` once, and check that it falls in the supported range (step 4).
-  - It writes **no file** and makes no network call. It loads no module beyond what `-NoProfile` gives.
-- **Protocol back to cmd.** One stdout line on success, a fixed exit code otherwise:
-  - **exit 0:** stdout is exactly `<ver>|<absolute node path>`. `|` cannot occur in either part. cmd reads it with `FOR /F "usebackq tokens=1* delims=|"`, then runs `"<node>" "<root>\<ver>\product\src\cli.ts" %*` from `trajecta.cmd`, or `"<node>" "<root>\<ver>\product\src\cli.ts" mcp %*` from `trajecta-mcp.cmd`, and propagates the exit code.
-  - **exit 1:** the validator has already written the exact §13.3 refusal line (not installed, damaged, or need Node) to stderr. cmd exits 1.
-  - **exit 10 (sentinel):**
-    - `trajecta.cmd` prints the native status text and exits 3 only when `%1` is exactly `uninstall`, `%2` is exactly `--status` and there is no `%3`. These argument tests use `"%~1"`. Command-line arguments are the user's own input, and the MCP wrapper never takes this branch.
-    - Every other case prints the §13.3 resume line and exits 1.
-  - **Any other exit code, or PowerShell missing, blocked or failing to start** (Constrained Language Mode, AppLocker, policy): fail closed with `trajecta: cannot validate the installation (Windows PowerShell unavailable or blocked)`, or the `<label>:` form for the MCP wrapper. Exit 1. Never fall back to a weaker cmd check.
-- **Unchanged.** No product or engine code and no Node module runs before exit 0. The only Node process started before then is the `--version` probe on the already validated path. The refusal texts, the sentinel precedence and the no-write rules are exactly §13.3. Node still starts after PowerShell has exited, so PowerShell is never a parent of the engine. Windows Ctrl-C evidence (§2.3) is unaffected, and is still observed through the `.cmd` wrapper.
+  1. Check `current` (§13.3 step 1).
+  2. Recognize the exact sentinel bytes `uninstalling\n` (step 2).
+  3. Apply the full step 3 grammar, byte for byte, including the `<ver>\node` file.
+  4. Run `<node> --version` once, capturing its output into a variable so nothing leaks to stdout. Then check that the version falls in the supported range (step 4).
+  - It writes no file and makes no network call.
+- **Protocol: one ASCII stdout line carries both status and data (Lam P1-1).** cmd never relies on `ERRORLEVEL` after `FOR /F`. The validator always exits 0 after printing exactly one of:
+  - `OK|<ver>|<node>`. `<ver>` is ASCII by grammar. `<node>` is the recorded absolute path if it is printable ASCII without `% ! ^ & | < > " ( )`. Otherwise it is that file's 8.3 short path from `GetShortPathName`, if one exists and passes the same test.
+  - `SENTINEL`
+  - `ERR|NOTINSTALLED`, `ERR|DAMAGED`, `ERR|NODE` or `ERR|NODEPATH`. `NODEPATH` means the recorded Node path is valid but has no cmd-safe ASCII form on this volume.
+  - Output is forced to ASCII with `[Console]::OutputEncoding = [Text.Encoding]::ASCII`, and only these bytes are written. Any other stdout is impossible by construction.
+- **cmd side.** `FOR /F "usebackq tokens=1-3 delims=|"` reads the output, counting lines. Exactly one recognized line is accepted. Zero lines, two or more lines, an unknown token, PowerShell missing, or PowerShell blocked (Constrained Language Mode, AppLocker, policy) all mean fail closed, with `<prefix>: cannot validate the installation (Windows PowerShell unavailable or blocked)` and exit 1. There is never a fallback to a weaker cmd check.
+  - **The wrapper formats every message itself (Lam P1-2).** `<prefix>` is `trajecta` for `trajecta.cmd` and `%~1` (the server label) for `trajecta-mcp.cmd`. The messages are the exact §13.3 texts: not installed, damaged, need Node, and the resume line. `NODEPATH` prints `<prefix>: the recorded Node path has no usable short form on this system; reinstall with Node at an ASCII path`. Every refusal exits 1.
+  - **Argv safety on Windows.** The MCP wrapper's arguments come from the plugin recipe, whose labels, defaults and engine arguments are refused at build time if they contain any cmd-special character (§13.2). A manual invocation is the invoking user's own command line. The validator never sees argv.
+  - **`SENTINEL`:** `trajecta.cmd` prints the native status text and exits 3 only when `%1` is exactly `uninstall`, `%2` is exactly `--status` and there is no `%3`. This holds even with Node missing, because the sentinel precedes the probe. Everything else prints the resume line and exits 1. The MCP wrapper always prints the resume line.
+  - **`OK`:** `"<node>" "%~dp0..\<ver>\product\src\cli.ts" %*` from `trajecta.cmd`, or `… cli.ts mcp %*` from `trajecta-mcp.cmd`. The exit code is propagated. The root path comes from `%~dp0`, which cmd holds as UTF-16, so a non-ASCII root works. The validator has already proven that `%~dp0` is `<root>\bin\`.
+- **Unchanged.** No product or engine code runs before `OK`. The only earlier Node process is the one `--version` probe on the validated path. PowerShell exits before the engine starts, so it is never the engine's parent. Ctrl-C evidence is still observed through the `.cmd`.
 - **M5/M3 (Windows):**
-  - Codex's LF / CR / NUL fixtures and every §13.3 row are each refused or accepted exactly;
+  - Codex's LF / CR / NUL fixtures and every §13.3 row are each refused or accepted exactly, through both wrappers;
+  - the outcomes `OK`, `SENTINEL` and each `ERR`, including status exit 3 with Node missing;
+  - MCP labels appear in the refusals of two concurrently configured servers;
   - a reparse-point `current`, a `<ver>` junction and a symlinked `node` file are each refused;
-  - an argv canary shows the validator never sees user arguments;
-  - PowerShell made unavailable (PATH emptied does not matter, because of the absolute path; simulated by a test-only `SystemRoot` pointing at an empty tree) fails closed;
-  - a `ConstrainedLanguage` session fails closed;
+  - a moved `.cmd` is refused as `DAMAGED`;
+  - the fake-`powershell.exe` canary never runs;
+  - a `ConstrainedLanguage` session and an AppLocker-blocked PowerShell each fail closed;
+  - a non-ASCII root and a non-ASCII Node path (short-path success, and `NODEPATH` with 8.3 disabled) give exact argv bytes;
+  - exactly one success record is read, and no `--version` text leaks;
+  - the 240-character-root length fixture, plus a build-time refusal above 8000 characters;
   - the process tree at engine start contains no PowerShell;
   - latency is recorded, and is not a gate.
