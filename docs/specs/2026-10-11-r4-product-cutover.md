@@ -478,11 +478,29 @@ These settle the three contract gaps Codex reported before writing any 4c code. 
 - **User-bin.** POSIX default `$HOME/.local/bin`; flags `--user-bin <absolute dir>` and `--no-user-bin`. Windows has **no** external copy: `<root>\bin` is the directory to put on PATH, and the installer prints that one line. The only external path install may create is `<user-bin>/trajecta`, a byte copy of `<root>/bin/trajecta`, plus the missing directories of `<user-bin>` that this run creates.
   - The launcher templates embed the absolute `<root>` literally, so the copy and the original are identical bytes and neither infers the root from `$0`.
   - **Plan first.** `.planned.json` lists the external file with its expected SHA-256, and the external directories that are missing at plan time.
-  - **Write.** Create each missing directory, shallowest first, and record it in the ledger entry's `created_dirs` immediately after each `mkdir` succeeds. Write `<user-bin>/.trajecta.<random>.tmp`, flush, rename onto `trajecta`, re-read, then ledger it. A file already there that is not ledgered with a matching hash is left alone and reported; it is never overwritten.
-  - **Ledger shape.** One `shared` entry with `kind: "external"`, the absolute path, its SHA-256 and `created_dirs` (absolute, in creation order). Generic outside-root entries stay forbidden: the ledger accepts an outside-root path only in this one shape, and only for `<user-bin>/trajecta`.
-  - **Crash.** A crash between a `mkdir` and its record can leak one empty directory. It is never removed later, because nothing proves this product created it. A leftover `.trajecta.*.tmp` in a recorded `<user-bin>` is removed by the next run, under the install lock.
-  - **Uninstall.** Full uninstall only (§5.4 step 4): unlink the external file only if its SHA-256 still matches, then `rmdir` the `created_dirs`, deepest first, each only if it is empty. A modified file is kept and reported, as for any shared path.
-- **Write-trace allowance (amends §2.4).** The product process may write only to: the install root; the planned `<user-bin>/trajecta`, its `.trajecta.*.tmp` siblings and the `created_dirs` this run records; the plugin output path of the current command; and engine-mediated store paths. Nothing else.
+  - **External journal (Lam R48-1).** Outside-root effects are receipted **before** they happen, in `<root>/external.json`. It is written as a tmp file, fsynced and renamed, and only while the install lock is held. Each record is **independent**: one per directory, one per temp file, and one for the launcher. No record claims a file that does not exist.
+    - **Directory.** Write the record `{dir, state: "intent"}`. Then `mkdir`, never recursive, one level at a time, shallowest first.
+      - `EEXIST`: the directory was not ours, so drop the record.
+      - Success: rewrite the record as `{dir, state: "created"}` and fsync the parent.
+      - Only `created` records become `shared` ledger entries of `kind: "external-dir"`.
+      - Crash between `mkdir` and `created`: the next run finds an `intent` record whose directory exists. Nothing proves this product created it, so the directory is **retained** and reported, never removed, and the record is dropped.
+    - **Temp file.** Write the record `{tmp: <user-bin>/.trajecta.<128-bit random>.tmp, sha256: <planned launcher SHA-256>, state: "intent"}`. Then create that exact path with exclusive create (`wx`), write, flush, rename onto `trajecta`, re-read, ledger the launcher, and drop the record.
+      - **On a later run, a recorded temp file is removed only if** it is a regular file at exactly the recorded path, and its bytes are a prefix of, or equal to, the planned launcher bytes.
+      - Any other file is retained and reported: one that matches only the name pattern, one with other bytes, or one with no record.
+      - Nothing is ever deleted because its name matches a pattern.
+    - **Launcher.** It becomes a `shared` ledger entry of `kind: "external"` only after the rename and re-hash, as in §5.2. A file already at `<user-bin>/trajecta` that is not ledgered with a matching hash is left alone and reported. It is never overwritten.
+    - Generic outside-root entries stay forbidden. The ledger accepts outside-root paths only in these two kinds: the one file `<user-bin>/trajecta` and the directories with `created` receipts.
+  - **Uninstall.** Full uninstall only (§5.4 step 4):
+    1. Unlink the external launcher only if its SHA-256 still matches.
+    2. Remove recorded temp files under the rule above.
+    3. `rmdir` the `external-dir` entries, deepest first, each only if it is empty.
+    - Anything else is retained and reported, as for any shared path. Uninstall finalizes with `external.json` removed only after it holds no record.
+  - **M3 additions.**
+    - A kill after every journal write, `mkdir` and rename boundary, with re-run convergence.
+    - A temp file the product does not own (a matching name with no record, and a recorded name with foreign bytes) is retained across retry and uninstall.
+    - A directory that appears between `intent` and `mkdir` (`EEXIST`) is never ledgered and never removed.
+    - A crash after `mkdir` but before `created` retains the directory.
+- **Write-trace allowance (amends §2.4).** The product process may write only to: the install root; the planned `<user-bin>/trajecta`, the temp files and directories this run journals in `external.json` (and removals under the rules above); the plugin output path of the current command; and engine-mediated store paths. Nothing else.
 
 ### 13.2 S2: one product plugin, one shared MCP wrapper, recipe in argv
 
@@ -525,11 +543,18 @@ The wrappers (`bin/trajecta`, `bin/trajecta-mcp` and their `.cmd` twins) decide 
    - Every other command, including `uninstall --resume` and every MCP start, refuses with the resume line:
      `trajecta is being uninstalled; resume with the command printed by 'trajecta uninstall', or run the installer bootstrap with --resume-uninstall`.
    - **Amends §5.4 step 2:** "allowed under the sentinel" means only through those two authenticated routes: the printed command with its embedded digest, and the hash-checked bootstrap. No local wrapper ever runs recovery code, and nothing on disk is used to choose an interpreter or to print a command. A resume command stored on disk would authenticate itself, so none is kept.
-3. **Line 1 names a version whose directory or `<ver>/node` file is missing:** `trajecta: installation at <root> is damaged; run the installer`.
+3. **Pointer and path validation (Lam R48-2).** All of the following refuse with `trajecta: installation at <root> is damaged; run the installer`, and none runs Node or product code:
+   - **`current` itself:** it must be a regular file, not a symlink or reparse point, of at most 256 bytes. Outside the sentinel, it must be exactly two LF-terminated lines.
+   - **Line 1:** it must match the product `versionName()` grammar `^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$`. It has no `/`, `\`, `:`, drive letter or NUL, and it is not `.` or `..`.
+   - **Line 2:** it must be empty or match the same grammar.
+   - **Any CR or other control character, or extra bytes,** is malformed.
+   - **`<root>/<ver>`** must be a real directory, not a symlink or junction.
+   - **`<root>/<ver>/node`** must be a regular file, not a symlink, holding exactly one LF-terminated absolute path with no control characters. The Node binary it names may itself be a symlink, such as Homebrew's: only the record file is checked.
+   - **On Windows,** the `.cmd` wrappers apply the same grammar, for example with `findstr /r` anchored patterns plus a length check. If cmd cannot enforce it byte-exactly, Codex stops and reports with a repro, rather than weakening the check.
 4. **The recorded Node fails the version probe:** `trajecta: need Node 22.19+ or 24 LTS` (MCP: `<label>: need Node 22.19+ or 24 LTS`).
 5. **Otherwise:** POSIX `exec "<node>" "<root>/<ver>/product/src/cli.ts" …`. Windows runs the same command and propagates its exit code.
 
-**M5/M3 add** one case per row, run on both POSIX and cmd. The sentinel case is run with Node absent too, to prove the precedence.
+**M5/M3 add** one case per row, run on both POSIX and cmd. The sentinel case is run with Node absent too, to prove the precedence. Row 3 is covered by: `../x`, an absolute path, a drive-letter path, an empty file, one line, three lines, a CRLF line ending, an oversized file, `current` as a symlink, `<ver>` as a symlink or junction, and `<ver>/node` as a symlink. Each case must refuse as damaged, and a sentinel file proves that nothing outside `<root>` ran.
 
 ### 13.4 Unchanged and binding
 
