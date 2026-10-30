@@ -711,29 +711,38 @@ So the Windows wrappers delegate steps 1–4 of §13.3 to one **read-only** vali
   - Without `--db`, the recipe stays profile-only, and the engine's own default resolution applies at run time, honoring `TRAJECTA_IDENTITY_DATA_DIR`.
 - **Precedence is the engine's.** An explicit `--db` in the recipe wins over `TRAJECTA_IDENTITY_DATA_DIR`. That is the frozen engine behavior, unchanged. The `--data-dir` default still applies to everything else the engine reads from it.
 - **Safety.** For a Windows target, the `--db` value goes through the same build-time refusal as every other recipe argument (§13.2). On POSIX it is forwarded exactly.
-- **Durable recipe record (Lam P1 @ cb05f63).** Every ledgered plugin `<root>/plugins/<name>.plugin` has a sibling `<root>/plugins/<name>.recipe.json`. It is a ledgered root file of scope `shared`, and it is the **only** source a later rebuild may use.
-  - **Content.** Canonical JSON (R0 writer), holding: `schema: "trajecta.plugin-recipe/v1"`; `target` (`posix` or `windows`); `profile`; `name` (the label override, or `null`); `db` (absolute, or `null`); `defaults` (a map containing only the four §13.2 keys); and `plugin_sha256`, the SHA-256 of the exact `.plugin` bytes built from this recipe.
-  - **Writing.** Install step 10 and `trajecta plugin` without `--out` build both files under the install lock.
-    1. Stage both, and record both expected SHA-256s in the plan.
-    2. Rename the `.plugin` into place, then the `.recipe.json`.
-    3. Re-read each one and ledger it.
-    - An existing ledgered pair is replaced only if both current hashes match the ledger. Otherwise the command refuses and leaves the files untouched (no foreign mutation).
-    - After a crash, re-running the same command converges through the normal plan adoption: files whose bytes match the plan are adopted.
-  - **`trajecta plugin --db second.sqlite3`** replaces the pair, so the record always describes the **last successfully accepted** recipe. It never falls back to the install's first `--db`.
-  - **`--out` artifacts** have no recipe record and are never rebuilt.
-- **Update rebuild (binds 4d).** For each ledgered plugin, `trajecta update` rebuilds **only if** all three hold:
-  - the `.plugin` hash matches the ledger;
-  - the `.recipe.json` hash matches the ledger;
-  - the record's `plugin_sha256` equals the ledgered `.plugin` hash.
-  It then rebuilds from that record **verbatim**, with the new product version, and replaces the pair under the rules above.
-  - It never recomputes a recipe from profile defaults or from install arguments.
-  - **Fail closed.** If any check fails, or the record is missing or does not parse, the update skips that plugin, leaves both files byte-identical, and reports `trajecta: plugin <name> not rebuilt (recipe record missing or modified); run trajecta plugin --profile … to rebuild it`. The update itself still succeeds, because the existing plugin keeps working through the wrapper (§12.3 M5).
+- **Durable recipe record in immutable generations (Lam P1 @ cb05f63 and @ 960e045).** A plugin pair is **never replaced in place**. Each successful build writes a new, immutable **generation**, and one atomic pointer selects the current one. This is the same pattern as the version `current` (§5.3), so no mixed old/new pair can ever be the current pair.
+  - **Layout.** `<root>/plugins/<name>/g<N>/` holds exactly `trajecta.plugin`, `recipe.json` and `.planned.json`. `<name>` is the plugin file stem from §13.1, and `N` is a positive decimal integer. `<root>/plugins/<name>/current` is a single LF-terminated line `g<N>`: a regular file of at most 32 bytes, grammar `^g[1-9][0-9]{0,8}\n$`.
+  - **Recipe record.** `recipe.json` is canonical JSON (R0 writer), holding: `schema: "trajecta.plugin-recipe/v1"`; `target` (`posix` or `windows`); `profile`; `name` (the label override, or `null`); `db` (absolute, or `null`); `defaults` (a map containing only the four §13.2 keys); and `plugin_sha256`, the SHA-256 of the exact `trajecta.plugin` bytes built from this recipe. It is the **only** source a later rebuild may use.
+  - **Build transaction.** This is install step 10, `trajecta plugin` without `--out`, and the 4d rebuild, all under the install lock.
+    1. Choose `N` = (largest existing `g<k>`) + 1, whether or not `g<k>` is complete. Create `g<N>/` with `mkdir` (never recursive; `EEXIST` means pick `N+1`).
+    2. Write `g<N>/.planned.json` first: tmp, fsync, rename. It holds the expected SHA-256 of `trajecta.plugin` and `recipe.json`.
+    3. Write each file (tmp, fsync, rename inside `g<N>/`), re-read it, and ledger it as `shared`, with the path, its hash and the generation.
+    4. Only when both files are ledgered with hashes equal to the plan, switch the pointer: write `current.tmp.<random>`, fsync, rename over `current`, and fsync the directory.
+    5. After the switch, the previous generation becomes **retired**. Its ledgered files are removed only if their hashes still match the ledger, then `rmdir`. A mismatch is retained and reported.
+  - **Recovery under the lock (any later `trajecta plugin`, install, update, doctor or uninstall).** Each generation is immutable once complete, so the pointer alone decides which pair is current. There is no pair-transition state to reconcile.
+    - **`current` valid and naming a complete generation:** that pair is current. A complete generation means both files are present, ledgered, matching the ledger and their own `.planned.json`, and `recipe.plugin_sha256` equals the plugin hash.
+    - **A generation newer than `current` (a crash before the switch).** Files that are unledgered are adopted only if their bytes equal that generation's own `.planned.json` (the §5.2 adoption rule, applied inside the generation). If the generation becomes complete, it is **not** switched automatically: it is the retired leftover of an interrupted command.
+      - Ledgered, matching files are removed, along with `.planned.json`, then `rmdir`.
+      - Anything foreign or mismatched is retained and reported.
+      - The re-run command builds a fresh `g<N+1>`.
+    - **A crash after the switch but before retirement:** the next run retires the older generation under rule 5.
+    - **`current` missing, malformed, or naming an incomplete or tampered generation:** no plugin is current. Nothing is removed, a typed error is reported, and the next explicit `trajecta plugin --profile …` builds a fresh generation and switches to it. Update skips that plugin.
+    - Pointer temps `current.tmp.*` in a plugin directory are removed under the lock. Root-internal temps of the lock holder follow the §5.2 re-entry rule.
+    - Nothing outside `<root>/plugins/<name>/` is touched, and no settled version `.planned.json` is ever rewritten.
+  - **The user-facing file** is `<root>/plugins/<name>/g<N>/trajecta.plugin`. `trajecta plugin` and `doctor` print the current path. A plugin already loaded into a client keeps working through the wrapper (§6). After a rebuild, the owner re-imports it only to pick up a new `plugin.json` version.
+  - **`trajecta plugin --db second.sqlite3`** builds a new generation from its own arguments, so the current record is always the **last successfully accepted** recipe. It never falls back to the install's first `--db`.
+  - **`--out` artifacts** have no record and no generation, and are never rebuilt.
+- **Update rebuild (binds 4d).** For each plugin directory whose `current` names a complete generation, `trajecta update` builds `g<N+1>` from that recipe record **verbatim**, with the new product version, using the transaction above. It never recomputes a recipe from profile defaults or from install arguments.
+  - **Fail closed.** If there is no complete current generation, update skips that plugin, changes no byte in its directory, and reports `trajecta: plugin <name> not rebuilt (recipe record missing or modified); run trajecta plugin --profile … to rebuild it`. The update itself still succeeds. The report states that the existing file was left untouched, and makes **no claim** that a missing or modified artifact still works (Lam P2).
+- **Windows validator (Lam P2).** The rendered `validator.ps1` is an **ephemeral render input** for `@@ENCODED_VALIDATOR@@`. It is never written to disk, never planned and never ledgered. M5 asserts that no `.ps1` exists under `<root>` after install.
 - **M5/M3 (P1):**
   - install with `--db custom`, then MCP status, then update with rebuild, then status: still the same custom store;
   - `trajecta plugin --db second.sqlite3`, then update, then status: stays on the second store;
   - the default `example.sqlite3` is never opened in either case;
-  - a tampered recipe record, a tampered plugin, and a `plugin_sha256` mismatch are each skipped and reported, with both files unchanged;
-  - a kill on each side of each rename converges on re-run;
+  - a tampered recipe record, a tampered plugin, and a `plugin_sha256` mismatch are each skipped and reported, with every byte unchanged;
+  - kills before and after each file rename, each ledger entry, the pointer rename and each retirement unlink, each followed by a re-run of the same command and separately by an update: everything converges, at most one generation is current, nothing is replaced in place, and nothing unowned is removed;
+  - a foreign file substituted into a generation between the kill and the restart is retained untouched;
   - an `--out` artifact is untouched by update.
 - **M5 additions.**
   - The install `--db custom` case: the plugin's MCP `initialize` plus `identity_status` show the custom store, initialized, with the same path the CLI reports.
