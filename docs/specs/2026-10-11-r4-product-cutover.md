@@ -473,7 +473,7 @@ These settle the three contract gaps Codex reported before writing any 4c code. 
 
 ### 13.1 S1: install destinations and the one external path
 
-- **Plugin destination.** Install Phase C step 10 builds exactly one plugin, for the profile named by `--profile`, at `<root>/plugins/trajecta-<safe profile>.plugin` (`safe_fs_name` as in R2d). With no `--profile`, step 10 writes nothing and prints `trajecta plugin --profile <name>`. The file is a **root-level `shared`** ledger entry: it survives version switches and is removed only by a full uninstall, when its hash still matches. A file already at that path that is not ledgered with a matching hash is left alone and reported (step 9 rule).
+- **Plugin destination.** Install Phase C step 10 builds exactly one plugin, for the profile named by `--profile`, in the plugin directory `<root>/plugins/trajecta-<safe profile>/` (`safe_fs_name` as in R2d). The file lives in the highest committed immutable generation in that directory (§13.6). With no `--profile`, step 10 writes nothing and prints `trajecta plugin --profile <name>`. The file is a **root-level `shared`** ledger entry: it survives version switches and is removed only by a full uninstall, when its hash still matches. A file already at that path that is not ledgered with a matching hash is left alone and reported (step 9 rule).
 - **`trajecta plugin`** takes `--profile <p>` (required), `--name <label>`, the R2e defaults flags (`--house`, `--data-dir`, `--profiles-dir`, `--work-root`) and `--out <file>`. Without `--out` it writes the same root-level path as above, under the install lock, ledgered `shared`. With `--out` it writes only that file (K2 atomic, temp file in the destination folder). That file is the user's own artifact: it is never ledgered and never removed by uninstall, and the command prints where it went.
 - **User-bin (redesigned after Lam R48-1…R48-6).** In automatic user-bin management the product **never deletes, renames over or replaces anything outside `<root>`**, and never creates an outside-root directory. The only other outside-root write is the user's explicit `trajecta plugin --out <file>`. Every outside-root cleanup or replacement the earlier drafts tried had a check-then-act seam, so the external surface is cut down to one no-replace create. Nothing outside the root ever needs cleaning up automatically.
   - **Where.** POSIX default `$HOME/.local/bin`; flags `--user-bin <absolute dir>` and `--no-user-bin`. Windows has **no** external file: `<root>\bin` is the directory to put on PATH, and the installer prints that one line.
@@ -539,7 +539,7 @@ These settle the three contract gaps Codex reported before writing any 4c code. 
   - `mcp` is not a pass-through verb. Its only observable effect before the import is these environment defaults.
 - **Windows argv safety.** `cmd.exe /d /c` re-parses arguments. So for a Windows target, `trajecta plugin` **refuses at build time** any label, default value or engine argument containing `% ! ^ & | < > " ( )`, a control character, or a trailing backslash. It refuses with a typed error naming the field, and writes nothing. POSIX targets accept any value, because `/bin/sh "$@"` forwards argv exactly.
 - **K1 (amended).** The product plugin carries `.claude-plugin/plugin.json`, `.mcp.json` and `skills/identity-continuity/`. The skill is copied byte for byte from the identity repo at the pinned engine SHA, never from an installed plugin. The plugin carries no executable: its launcher is the root wrapper, so `scripts/` is absent. A top-level `bin/` is still forbidden.
-- **K6 (scoped).** `plugin.json.version` equals the product version that built the plugin, and K6 is tested at build time. After `trajecta update` the plugin keeps working without a rebuild (§12.3 M5). `doctor` reports a built-version versus current-version difference as information, not as an error. 4d rebuilds the ledgered `<root>/plugins/*.plugin` files as part of an update. A `--out` artifact is the user's own and is not rebuilt.
+- **K6 (scoped).** `plugin.json.version` equals the product version that built the plugin, and K6 is tested at build time. After `trajecta update` the plugin keeps working without a rebuild (§12.3 M5). `doctor` reports a built-version versus current-version difference as information, not as an error. 4d rebuilds each ledgered plugin as a new generation (§13.6) as part of an update. A `--out` artifact is the user's own and is not rebuilt.
 - **M5 additions.**
   - Two plugins for the same root (profiles A and B, defaults `~/a` and `~/b` for the same key) run concurrently, and each sees its own value.
   - A preset non-empty value wins for each of the four keys, independently.
@@ -657,3 +657,122 @@ So the Windows wrappers delegate steps 1–4 of §13.3 to one **read-only** vali
   - the 240-character-root length fixture, plus a build-time refusal above 8000 characters;
   - the process tree at engine start contains no PowerShell;
   - latency is recorded, and is not a gate.
+
+### 13.6 PR 4c preflight S4 and S5 (Codex STOP @ b0d822b; Aux settlement 2026-10-31)
+
+**S4: what the release archive's `bin/` holds.** A release cannot contain rendered wrappers, because their bytes depend on `<root>` and, on Windows, on the pinned PowerShell path. Neither is known at build time (Codex rendered roots A and B and got different SHA-256s). So the archive carries **templates**, and install renders them, as §5.2 step 7 already says: "rendered from templates into staging". This amends §2.2.
+
+- **Archive layout.** `bin/templates/` holds exactly six files:
+  - `trajecta.sh.tmpl`
+  - `trajecta-mcp.sh.tmpl`
+  - `user-stub.sh.tmpl`
+  - `trajecta.cmd.tmpl`
+  - `trajecta-mcp.cmd.tmpl`
+  - `validator.ps1.tmpl`
+
+  They are listed in `MANIFEST.json` like every other file. They are root-independent and byte-deterministic, so two builds give identical tarballs. They are mode 0644: templates never execute.
+- **Release completeness (replaces "bin/ present and complete").** A build with `"artifact": "release"` refuses unless the six templates are present, and each contains exactly its documented placeholder set (below). A foundation artifact still has no `bin/`.
+- **Placeholders.** These are the only tokens. Each template declares the exact count of each token it contains, and the renderer checks those counts.
+  - `@@ROOT_SH@@` = `_sh_quote(<root>)` (POSIX templates).
+  - `@@ROOT_PS@@` = `<root>` as a PowerShell single-quoted literal, with `'` doubled (validator).
+  - `@@POWERSHELL@@` = the install-pinned absolute PowerShell path (§13.5), which is already validated as ASCII with no cmd-special characters (`.cmd` templates).
+  - `@@ENCODED_VALIDATOR@@` = the base64 UTF-16LE of the rendered `validator.ps1` (`.cmd` templates).
+- **Canonical placeholder table (Lam P2).** The template set and these exact counts live in one product source constant. The build, the renderer and the tests all read it. Every token not listed for a template has count 0.
+
+  | Template | `@@ROOT_SH@@` | `@@ROOT_PS@@` | `@@POWERSHELL@@` | `@@ENCODED_VALIDATOR@@` |
+  |---|---|---|---|---|
+  | `trajecta.sh.tmpl` | 1 | 0 | 0 | 0 |
+  | `trajecta-mcp.sh.tmpl` | 1 | 0 | 0 | 0 |
+  | `user-stub.sh.tmpl` | 1 | 0 | 0 | 0 |
+  | `trajecta.cmd.tmpl` | 0 | 0 | 1 | 1 |
+  | `trajecta-mcp.cmd.tmpl` | 0 | 0 | 1 | 1 |
+  | `validator.ps1.tmpl` | 0 | 1 | 0 | 0 |
+- **Platform selection.** A POSIX install renders only the three `.sh` templates. It never resolves or pins PowerShell, and never touches the Windows templates. A Windows install renders only `validator.ps1` and the two `.cmd` templates, and has no user stub (§13.1).
+- **Modes.** Rendered POSIX launchers and the stub are written 0755, and M5 runs them directly. Rendered `.cmd` files are 0644. The archived `.tmpl` files stay 0644.
+- **Renderer.** It is a pure function in `product/src`.
+  - **Single pass, positional.** It splits the template on the token literals and joins the pieces with the values. A value is never scanned again, so a root that itself contains `@@ROOT_SH@@` cannot inject.
+  - **It refuses** with a typed error if any token count differs from the declaration, if any template literal segment contains `@@`, or if a value fails its rule.
+    - All of these are checked on the **template**, before any value is inserted (Codex review). The template is split on the four token literals; every literal segment between them must be free of `@@`, so an unknown or malformed token is caught in the template itself.
+    - The rendered output is **never** scanned for `@@`. A legitimate root such as `/tmp/@@ROOT_SH@@` therefore renders, and stays inert inside its quoted value. The rules: the §13.5 checks for the PowerShell path, and for `<root>` the 8000-character limit on the `.cmd` line.
+  - **Output.** The rendered bytes go to staging in Phase A. Their SHA-256s go into `.planned.json`, and Phase C copies those exact bytes (§5.2 step 7). Rendered wrappers are ledgered root files at `<root>/bin/`.
+- **Tests (M2/M3/M5).**
+  - Two release builds are byte-identical.
+  - Rendering roots A and B gives different bytes, and each matches the expected output exactly (golden files with the placeholders filled).
+  - A root containing a token literal, `'`, `"`, `$`, `` ` `` or whitespace renders safely.
+  - A missing template, an extra token, or an unknown `@@…@@` in a template literal segment each make the build or the install refuse. A root containing `@@ROOT_SH@@` renders, and its golden output matches exactly.
+  - The release completeness refusal is exercised.
+
+**S5: a custom `--db` must reach the MCP recipe.** `install --profile example --db <temp>/identity/custom.sqlite3` bootstraps that file. A profile-only recipe would then open the engine's default `<data dir>/example.sqlite3`, so the plugin would show a different, uninitialized store. The frozen identity MCP entry already accepts `--db` (`node/src/mcp.ts`, `argumentsFrom`), so no engine change is needed.
+
+- **Recipe (amends §13.2).** The identity `<engine args>` are `--profile <p>`, followed by `--db <absolute path>` when a database path was given. Work args are unchanged.
+- **Where the path comes from.**
+  - Install step 10 uses the install's `--db`, resolved to an absolute path, when one was given.
+  - `trajecta plugin` gains `--db <path>`, also resolved to an absolute path.
+  - Without `--db`, the recipe stays profile-only, and the engine's own default resolution applies at run time, honoring `TRAJECTA_IDENTITY_DATA_DIR`.
+- **Precedence is the engine's.** An explicit `--db` in the recipe wins over `TRAJECTA_IDENTITY_DATA_DIR`. That is the frozen engine behavior, unchanged. The `--data-dir` default still applies to everything else the engine reads from it.
+- **Safety.** For a Windows target, the `--db` value goes through the same build-time refusal as every other recipe argument (§13.2). On POSIX it is forwarded exactly.
+- **Durable recipe record in immutable generations, committed by the ledger (Lam P1 @ cb05f63, @ 960e045, @ 89b2fc3).** A plugin pair is never replaced in place. There is **no pointer file**: the ownership ledger's own atomic replace (`owned.json`, tmp plus rename, §5.2) is the single commit point. This removes the mutable `current`, its temps and every "old ledger versus new pointer" state.
+  - **Layout.** `<root>/plugins/<name>/g<N>/` holds exactly `trajecta.plugin`, `recipe.json` and `.planned.json`. `<name>` is the stem from §13.1, and `N` is a positive decimal integer of at most 9 digits.
+  - **Recipe record.** `recipe.json` is canonical JSON (R0 writer), holding: `schema: "trajecta.plugin-recipe/v1"`; `target` (`posix` or `windows`); `profile`; `name` (the label override, or `null`); `db` (absolute, or `null`); `defaults` (a map containing only the four §13.2 keys); and `plugin_sha256`, the SHA-256 of the exact `trajecta.plugin` bytes. It is the only source a later rebuild may use.
+  - **Containment (Lam P1-2).** Before every traversal or mutation, each existing component from `<root>` down to the target is checked with `lstat` (`GetAttributes` on Windows). Each must be a real directory: not a symlink, not a reparse point or junction, and not a non-directory. It must also be ledgered as `kind: "dir"`, or be `<root>` itself.
+    - **Transaction-local exception (Lam P1-1 @ 75b48f6).** The one uncommitted directory that may be written into is the `g<N>` that **this run** created itself, with exclusive `mkdir`, while holding the lock.
+      - Immediately after `mkdir`, the run records that directory's `dev`/`ino` in memory. Before each write into it, it re-checks with `lstat` that the path is still a real directory with the same `dev`/`ino`.
+      - The exception never extends to a directory this run did not create: a pre-existing uncommitted directory, a crash leftover, or one created by another process.
+    - Files are created with exclusive create and no-follow (`wx`, `O_NOFOLLOW` where the OS has it). The ledgered `dev`/`ino` of the parent directory is re-checked before and after each write.
+    - Enumeration never descends into a generation entry that fails these checks.
+    - Any failure refuses with `trajecta: plugin directory <path> is not a product-owned real directory; nothing was written` and exit 1, with no write.
+    - **Threat boundary, stated:** the install lock excludes other product processes. A concurrent same-user process racing between a check and a create already holds the user's write rights, and a mis-directed plugin write grants it nothing new. Even so, the post-write `dev`/`ino` check turns any detected race into a refusal before the commit.
+  - **Directories are receipted.** `<root>/plugins`, `<root>/plugins/<name>` and each `g<N>` are created with non-recursive `mkdir`. The plugin root and plugin directory are ledgered as `kind: "dir"`, scope `shared`, in their own ledger update immediately after `mkdir`.
+    - **Crash between `mkdir` and its ledger update:** the next run finds an unledgered directory at that exact path. It is adopted only if it is a real, **empty** directory, because an empty directory holds no foreign bytes to protect. A non-empty unledgered directory refuses as above.
+    - `g<N>` directories are ledgered in the generation commit below.
+  - **Build transaction.** This is install step 10, `trajecta plugin` without `--out`, and the 4d rebuild, all under the install lock.
+    1. **Monotonic `N` (Lam P1-2).** `N` is one more than the largest of three numbers: every `g<k>` name present on disk (ledgered or not), every committed generation in the ledger, and every **tombstoned** generation in the ledger (below). A number is never reused. Create `g<N>` with exclusive `mkdir`; `EEXIST` means pick `N+1`.
+    2. Write `.planned.json`, then `recipe.json`, then `trajecta.plugin`. Each one is created exclusively under a temp name inside `g<N>`, flushed and renamed. Then re-read all three and check them against the plan.
+    3. **Commit.** **One** `owned.json` replace adds all four entries together: `g<N>` as a `dir`, plus `.planned.json`, `recipe.json` and `trajecta.plugin`, each with its hash, all scope `shared` and tagged with the generation. A generation therefore has either zero or four entries. There is no partial state.
+    4. **Retirement (resumable, Lam P2).** This runs only while a **newer valid committed generation** exists, never on the current generation. For each older committed generation:
+       - each of its three files that is **absent** counts as an unlink already completed by an interrupted run;
+       - each present file is unlinked only if its hash still matches its receipt;
+       - then `rmdir` the directory if it is empty;
+       - if all three files and the directory are gone, **one** `owned.json` replace drops all four receipts together.
+       - If any present byte does not match, or the directory is not empty, everything that remains is retained and reported, and **all four** receipts are kept. The 0-or-4 rule holds. That generation is never current, because a newer valid one exists.
+  - **Which generation is current (Lam P1 @ 5351eb2).** Take the **high-water** generation for the plugin: the largest `N` among its committed generations **and** its tombstones. Current is that generation only if it is a **committed** one.
+    - If the high-water is a tombstone, the plugin has **no current generation** until a newer valid generation is committed. This holds even if an older committed `g<k>` still has matching receipts, so a tombstone can never re-expose an older recipe.
+    - The older committed `g<k>` is then retired by the ordinary rule only once a newer valid generation is committed.
+    - Tombstones still grant no ownership and are never committed generations. They only bound selection and numbering.
+    - It is **valid** only if all four committed entries match disk: hashes, the real directory, and `recipe.plugin_sha256` equal to the plugin hash. Otherwise there is **no current plugin**.
+    - There is never a fall-back to an older generation.
+    - An uncommitted generation (zero entries) is never current and is **never adopted**, even if its bytes match its own `.planned.json`. That plan is not ledgered, so it proves nothing. A crash leftover is retained and reported, never removed and never overwritten. The next build skips past it by number.
+  - **Tampering and recovery.** A valid current generation is never overwritten. A new build always writes a new `g<N+1>`.
+    - If the highest committed generation is not valid (a modified, missing or symlinked file or directory), `trajecta plugin` and update **refuse for that plugin**. They make no write and no cleanup, and report `trajecta: plugin <name> was modified (<paths>); move those paths out of <root>/plugins/<name>/ and run trajecta plugin --profile … again`.
+    - **Recovery is the owner's explicit action, and it works on whole generations (Lam P1-2).** The refusal tells the owner to move the **entire** `g<N>` directory out of `<root>/plugins/<name>/`.
+      - On the next `trajecta plugin --profile …`, if the invalid highest committed generation's directory is **entirely absent**, one `owned.json` replace converts its four receipts into a single `{kind: "tombstone", plugin: <name>, generation: N}` entry. Then it builds `g<N+1>`.
+      - **A tombstone** grants no ownership and protects no bytes. It never counts as a committed generation, and its only use is the monotonic `N` above.
+      - If only part of `g<N>` was moved away (some paths absent, others present), the command still refuses and repeats the instruction. Receipts are never dropped one by one. Bytes still present that are not ours are never touched.
+  - **User-facing path:** `<root>/plugins/<name>/g<N>/trajecta.plugin`, printed by `trajecta plugin` and `doctor`. A plugin already loaded into a client keeps working through the wrapper (§6).
+  - **`trajecta plugin --db second.sqlite3`** builds a new generation from its own arguments, so the current record is always the last successfully accepted recipe. **`--out`** artifacts have no record and no generation, and are never rebuilt.
+  - **Uninstall (full) is its own authorization (Lam P2).** Ordinary retirement never touches the current generation. A confirmed full uninstall, running under the §5.4 `uninstalling` sentinel, is the **separate authorization** to remove every generation, including the current or only one. It uses the same mechanics: hash-checked unlinks, absent counted as done, non-recursive `rmdir`, and atomic drop of all four receipts. It removes every committed generation by those rules: absent means done, hash-matching files are unlinked, and the four receipts drop together. It also drops tombstones, which are ledger-only. Then it removes the ledgered `dir` entries, deepest first, each only if it is empty. With no crash leftovers and no tampering, the root ends empty. Anything else is retained and reported (§5.4).
+- **Update rebuild (binds 4d).**
+  - **Valid current generation:** update builds `g<N+1>` from that recipe record **verbatim**, with the new product version, then retires the older generation.
+  - **No valid current generation:** update skips that plugin directory **entirely**. It does no cleanup, no retirement and no write, so "changes no byte" holds literally. It reports the refusal line above, making no claim that the existing artifact works. The update itself still succeeds.
+- **Windows validator (Lam P2).** The rendered `validator.ps1` is an **ephemeral render input** for `@@ENCODED_VALIDATOR@@`. It is never written to disk, never planned and never ledgered. M5 asserts that no `.ps1` exists under `<root>` after install.
+- **M5/M3 (P1):**
+  - install with `--db custom`, then MCP status, then update with rebuild, then status: still the same custom store;
+  - `trajecta plugin --db second.sqlite3`, then update, then status: stays on the second store;
+  - the default `example.sqlite3` is never opened in either case;
+  - a tampered recipe record, a tampered plugin, and a `plugin_sha256` mismatch are each skipped and reported, with every byte unchanged;
+  - kills at every boundary, each followed by a re-run of the same command and separately by an update: before and after each `mkdir`, each dir ledger update, each file rename, the commit and each retirement step. Everything converges, the current generation is always the highest committed valid one, nothing is replaced in place, uncommitted leftovers are retained, and nothing unowned is removed;
+  - a foreign file substituted into a generation between the kill and the restart is retained untouched;
+  - containment: `plugins/<name>` as a symlink or junction to an external directory, a `g<N>` symlink, and `plugins` as a regular file. Each is refused with no write, and an external marker directory stays byte-identical;
+  - a normal fresh build writes into its own new `g<N>`; a pre-existing unledgered non-empty `g<N>` is refused; a crash-leftover uncommitted generation is not adopted; the run's own `g<N>` swapped for a symlink between `mkdir` and a write is refused (the `dev`/`ino` re-check);
+  - recovery: moving only the corrupted `recipe.json` out still refuses, and keeps all four receipts; moving the whole `g<N>` out tombstones it, and the rebuild is `g<N+1>` (never reusing `N`); both are followed by a full uninstall with no unauthorized deletion;
+  - retirement: a kill after the first unlink, then restart, converges by dropping all four receipts; a later full uninstall leaves an empty root;
+  - fall-back barrier: `g1` committed, `g2` committed, a crash before retirement, then `g2` tampered and moved out, then tombstoned, then a kill before `g3` commits. `doctor` and update report no current plugin and never select `g1`, and no outdated `--db` recipe is exposed. A later explicit rebuild commits `g3`, which becomes current, and `g1` is then retired;
+  - full uninstall from a single valid `g1` (no newer generation) leaves an empty root; the same with a kill after the first unlink, then resume, also leaves an empty root;
+  - a tampered current generation refuses without overwrite; after the owner moves the modified paths out, the command converges;
+  - a normal install, rebuild and full uninstall leave an empty root;
+  - update with a tampered current, plus an uncommitted newer generation: no byte changes in that plugin directory;
+  - an `--out` artifact is untouched by update.
+- **M5 additions.**
+  - The install `--db custom` case: the plugin's MCP `initialize` plus `identity_status` show the custom store, initialized, with the same path the CLI reports.
+  - A profile-only plugin with `TRAJECTA_IDENTITY_DATA_DIR` set resolves the default name under that directory.
+  - A Windows `--db` containing a cmd-special character is refused at build time.
