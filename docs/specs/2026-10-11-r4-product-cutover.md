@@ -475,16 +475,20 @@ These settle the three contract gaps Codex reported before writing any 4c code. 
 
 - **Plugin destination.** Install Phase C step 10 builds exactly one plugin, for the profile named by `--profile`, at `<root>/plugins/trajecta-<safe profile>.plugin` (`safe_fs_name` as in R2d). With no `--profile`, step 10 writes nothing and prints `trajecta plugin --profile <name>`. The file is a **root-level `shared`** ledger entry: it survives version switches and is removed only by a full uninstall, when its hash still matches. A file already at that path that is not ledgered with a matching hash is left alone and reported (step 9 rule).
 - **`trajecta plugin`** takes `--profile <p>` (required), `--name <label>`, the R2e defaults flags (`--house`, `--data-dir`, `--profiles-dir`, `--work-root`) and `--out <file>`. Without `--out` it writes the same root-level path as above, under the install lock, ledgered `shared`. With `--out` it writes only that file (K2 atomic, temp file in the destination folder). That file is the user's own artifact: it is never ledgered and never removed by uninstall, and the command prints where it went.
-- **User-bin (redesigned after Lam R48-1…R48-6).** The product **never deletes, renames over or replaces anything outside `<root>`**, and never creates an outside-root directory. Every outside-root cleanup or replacement the earlier drafts tried had a check-then-act seam, so the external surface is cut down to one no-replace create. Nothing outside the root ever needs cleaning up automatically.
+- **User-bin (redesigned after Lam R48-1…R48-6).** In automatic user-bin management the product **never deletes, renames over or replaces anything outside `<root>`**, and never creates an outside-root directory. The only other outside-root write is the user's explicit `trajecta plugin --out <file>`. Every outside-root cleanup or replacement the earlier drafts tried had a check-then-act seam, so the external surface is cut down to one no-replace create. Nothing outside the root ever needs cleaning up automatically.
   - **Where.** POSIX default `$HOME/.local/bin`; flags `--user-bin <absolute dir>` and `--no-user-bin`. Windows has **no** external file: `<root>\bin` is the directory to put on PATH, and the installer prints that one line.
     - If the user-bin directory does not exist, or is not a real directory (a symlink is fine only if it resolves to a directory the user owns), the step is skipped. The installer prints the PATH line for `<root>/bin` instead.
   - **What.** A fixed **stub** that never needs updating, because it embeds only the absolute root:
     ```sh
     #!/bin/sh
-    [ -f '<root>/bin/trajecta' ] || { echo "trajecta: not installed at <root>; run the installer, or remove $0" >&2; exit 1; }
-    exec /bin/sh '<root>/bin/trajecta' "$@"
+    R=<_sh_quote(root)>
+    [ -f "$R/bin/trajecta" ] || { printf 'trajecta: not installed at %s; run the installer, or remove %s\n' "$R" "$0" >&2; exit 1; }
+    exec /bin/sh "$R/bin/trajecta" "$@"
     ```
-    - `<root>` is quoted with `_sh_quote`, and the stub contains no other variable data. The `exec` keeps one process, because the root launcher then `exec`s Node.
+    - **Injection-safe (Lam R48-7).** The absolute root appears in the source exactly once, as a single `_sh_quote`d word assigned to `R`. Everything else references it as `"$R"`.
+    - Diagnostics use a **static** `printf` format, with the root and `$0` passed as separate quoted arguments.
+    - No path is ever interpolated into a double-quoted string or a format string. The same rule binds every generated shell source in 4c: the root launchers, `trajecta-mcp` and the stub.
+    - The stub contains no other variable data. The `exec` keeps one process, because the root launcher then `exec`s Node.
     - A template change in a later product version changes only `<root>/bin/trajecta`, which lives inside the root. The stub's bytes are the same for every version with that root.
   - **How (the only outside-root write).**
     - The stub is staged **inside the root** as `<root>/bin/.user-stub`, a normal ledgered root file.
@@ -506,7 +510,9 @@ These settle the three contract gaps Codex reported before writing any 4c code. 
     - a kill on each side of the `link`, after which a re-run converges;
     - a full uninstall that leaves the external file and prints the line;
     - the stub after uninstall, which refuses and exits 1;
-    - the process tree through the stub, which shows a single Node process.
+    - the process tree through the stub, which shows a single Node process;
+    - the stub is mode 0755 (the hard link shares the inode mode) and is invoked directly by name from PATH;
+    - **custom roots containing** whitespace, `'`, `"`, `$`, `$(…)` and backticks, run both with the root launcher present and after uninstall: the diagnostic and argv are exactly literal, and a canary proves that zero injected code ran.
 - **Write-trace allowance (amends §2.4).** The product process may write only to: the install root; the one hard link `<user-bin>/trajecta` created by `link()` (never a write through it, never a removal); the plugin output path of the current command; and engine-mediated store paths. Nothing else.
 
 ### 13.2 S2: one product plugin, one shared MCP wrapper, recipe in argv
