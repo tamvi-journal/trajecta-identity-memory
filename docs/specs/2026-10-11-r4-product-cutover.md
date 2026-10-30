@@ -551,13 +551,15 @@ These settle the three contract gaps Codex reported before writing any 4c code. 
 The wrappers (`bin/trajecta`, `bin/trajecta-mcp` and their `.cmd` twins) decide in this exact order. Every refusal goes to stderr and exits 1. None of these steps runs Node or product code.
 
 1. **`current` missing or unreadable:** `trajecta: not installed at <root>; run the installer`.
+   - **`current` present but not a regular file, a symlink or reparse point, or over 256 bytes:** refuse as damaged (the step 3 message).
+   - This is checked **before** the sentinel is interpreted (Lam P1 @ 8cd61f4), so a symlinked `current` whose target holds the sentinel bytes can never produce a false `uninstall --status`. Sentinel precedence over every Node check is unchanged.
 2. **`current` line 1 is exactly `uninstalling`:** the sentinel takes precedence over every Node check.
    - `trajecta uninstall --status`, with exactly those two arguments: the wrapper answers natively with the fixed text `trajecta: uninstall in progress at <root>` followed by the resume line below. It exits 3, a distinct code, so scripts can tell "in progress" from an error.
    - Every other command, including `uninstall --resume` and every MCP start, refuses with the resume line:
      `trajecta is being uninstalled; resume with the command printed by 'trajecta uninstall', or run the installer bootstrap with --resume-uninstall`.
    - **Amends §5.4 step 2:** "allowed under the sentinel" means only through those two authenticated routes: the printed command with its embedded digest, and the hash-checked bootstrap. No local wrapper ever runs recovery code, and nothing on disk is used to choose an interpreter or to print a command. A resume command stored on disk would authenticate itself, so none is kept.
 3. **Pointer and path validation (Lam R48-2).** All of the following refuse with `trajecta: installation at <root> is damaged; run the installer`, and none runs Node or product code:
-   - **`current` itself:** it must be a regular file, not a symlink or reparse point, of at most 256 bytes. Outside the sentinel, it must be exactly two LF-terminated lines.
+   - **`current` itself:** it was already checked to be a regular file under 256 bytes in step 1. Outside the sentinel, it must be exactly two LF-terminated lines.
    - **Line 1:** it must match the product `versionName()` grammar `^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$`. It has no `/`, `\`, `:`, drive letter or NUL, and it is not `.` or `..`.
    - **Line 2:** it must be empty or match the same grammar.
    - **Any CR or other control character, or extra bytes,** is malformed.
@@ -599,17 +601,30 @@ So the Windows wrappers delegate steps 1–4 of §13.3 to one **read-only** vali
   - **Inputs.** The validator reads exactly one environment variable, `TRAJECTA_WRAPPER_DIR`, which the wrapper sets on the line before the call with `set "TRAJECTA_WRAPPER_DIR=%~dp0"`, overwriting any inherited value. It never receives user argv. If that directory, normalized with `GetFullPath` and compared ordinal-ignore-case, is not `<root>\bin\`, the result is `DAMAGED`. A moved or copied `.cmd` can never run a different tree's `cli.ts`.
   - **Length limit.** The complete `.cmd` line that carries the encoded command must be at most 8000 characters, under cmd's 8191 limit. This is checked at build time with a typed refusal, never truncated. A long-root fixture (a 240-character non-ASCII root) is in M5.
 - **What it does: read-only, in order.** It reads raw bytes with `[IO.File]::ReadAllBytes` and attributes with `[IO.File]::GetAttributes`. A `ReparsePoint` attribute counts as a symlink or junction.
-  1. Check `current` (§13.3 step 1).
+  1. Apply §13.3 step 1 in full: a missing `current` is `NOTINSTALLED`; a non-regular file, a reparse point or more than 256 bytes is `DAMAGED`. This happens before any byte is interpreted.
   2. Recognize the exact sentinel bytes `uninstalling\n` (step 2).
   3. Apply the full step 3 grammar, byte for byte, including the `<ver>\node` file.
-  4. Run `<node> --version` once, capturing its output into a variable so nothing leaks to stdout. Then check that the version falls in the supported range (step 4).
+  4. **Probe Node (Lam P2).** Run `<node> --version` once through `System.Diagnostics.Process`:
+     - `UseShellExecute = false`, with stdin, stdout and stderr all redirected;
+     - both output streams read to the end asynchronously;
+     - a 10-second timeout, after which the process is killed.
+     Nothing the probe writes, on either stream, ever reaches the wrapper's stdout or stderr. A timeout, a non-zero exit or an out-of-range version is `ERR|NODE` (step 4).
   - It writes no file and makes no network call.
-- **Protocol: one ASCII stdout line carries both status and data (Lam P1-1).** cmd never relies on `ERRORLEVEL` after `FOR /F`. The validator always exits 0 after printing exactly one of:
+- **Protocol: one ASCII stdout record carries both status and data (Lam P1-1).** cmd never relies on `ERRORLEVEL` after `FOR /F`. The validator always exits 0. It writes its whole stdout with a single `[Console]::Out.Write`: exactly one record, framed as `TRJ1|<body>|END` and ending in CRLF. `<body>` is one of:
   - `OK|<ver>|<node>`. `<ver>` is ASCII by grammar. `<node>` is the recorded absolute path if it is printable ASCII without `% ! ^ & | < > " ( )`. Otherwise it is that file's 8.3 short path from `GetShortPathName`, if one exists and passes the same test.
   - `SENTINEL`
   - `ERR|NOTINSTALLED`, `ERR|DAMAGED`, `ERR|NODE` or `ERR|NODEPATH`. `NODEPATH` means the recorded Node path is valid but has no cmd-safe ASCII form on this volume.
   - Output is forced to ASCII with `[Console]::OutputEncoding = [Text.Encoding]::ASCII`, and only these bytes are written. Any other stdout is impossible by construction.
-- **cmd side.** `FOR /F "usebackq tokens=1-3 delims=|"` reads the output, counting lines. Exactly one recognized line is accepted. Zero lines, two or more lines, an unknown token, PowerShell missing, or PowerShell blocked (Constrained Language Mode, AppLocker, policy) all mean fail closed, with `<prefix>: cannot validate the installation (Windows PowerShell unavailable or blocked)` and exit 1. There is never a fallback to a weaker cmd check.
+- **cmd side: the parser's exact acceptance contract (Lam P2).**
+  1. **Records.** A first `FOR /F "usebackq delims= eol=|"` reads whole lines, with no token splitting. `eol=|` is used because no record can start with `|`. It counts the records and keeps the last one.
+     - **Blank lines are invisible to `FOR /F`** and carry no data. The validator never writes one, so a blank line is not a channel and is not counted.
+     - Every non-blank line is counted, including lines starting with `;`, because `eol` is not `;`.
+     - The count must be exactly 1.
+  2. **Fields.** A second `FOR /F "tokens=1-5* delims=|"` splits the kept record.
+     - Token 1 must be `TRJ1`.
+     - The last field must be `END`, the field count must match the status exactly (`OK` has five fields; `SENTINEL` three; `ERR` four), and the remainder `*` must be empty.
+     - A missing field, a fourth field where three are expected, a doubled `|` (empty fields collapse in `FOR /F`, so a record whose field count changes fails this check), an unknown status, or a missing `END` is rejected.
+  3. **Fail closed.** Any rejection, zero records, two or more records, PowerShell missing, or PowerShell blocked (Constrained Language Mode, AppLocker, policy) means `<prefix>: cannot validate the installation (Windows PowerShell unavailable or blocked)` and exit 1. There is never a fallback to a weaker cmd check.
   - **The wrapper formats every message itself (Lam P1-2).** `<prefix>` is `trajecta` for `trajecta.cmd` and `%~1` (the server label) for `trajecta-mcp.cmd`. The messages are the exact §13.3 texts: not installed, damaged, need Node, and the resume line. `NODEPATH` prints `<prefix>: the recorded Node path has no usable short form on this system; reinstall with Node at an ASCII path`. Every refusal exits 1.
   - **Argv safety on Windows.** The MCP wrapper's arguments come from the plugin recipe, whose labels, defaults and engine arguments are refused at build time if they contain any cmd-special character (§13.2). A manual invocation is the invoking user's own command line. The validator never sees argv.
   - **`SENTINEL`:** `trajecta.cmd` prints the native status text and exits 3 only when `%1` is exactly `uninstall`, `%2` is exactly `--status` and there is no `%3`. This holds even with Node missing, because the sentinel precedes the probe. Everything else prints the resume line and exits 1. The MCP wrapper always prints the resume line.
@@ -618,6 +633,9 @@ So the Windows wrappers delegate steps 1–4 of §13.3 to one **read-only** vali
 - **M5/M3 (Windows):**
   - Codex's LF / CR / NUL fixtures and every §13.3 row are each refused or accepted exactly, through both wrappers;
   - the outcomes `OK`, `SENTINEL` and each `ERR`, including status exit 3 with Node missing;
+  - a reparse-point `current` whose target holds the exact sentinel gives `ERR|DAMAGED`, with no Node and no status exit 3 (POSIX: a symlinked `current`, the same result);
+  - framing faults fed through a test-only validator stub are each refused: an extra `;` line, two records, a fourth field, a missing field, a missing `END`, `||`, a wrong magic;
+  - a fake `node` that writes to stderr and exits non-zero, and one that hangs: exactly the wrapper's refusal appears, with none of the fake's bytes and no hang beyond the timeout;
   - MCP labels appear in the refusals of two concurrently configured servers;
   - a reparse-point `current`, a `<ver>` junction and a symlinked `node` file are each refused;
   - a moved `.cmd` is refused as `DAMAGED`;
