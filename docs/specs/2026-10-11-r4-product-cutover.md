@@ -492,6 +492,7 @@ These settle the three contract gaps Codex reported before writing any 4c code. 
     - **`EEXIST`:** if the existing file's bytes equal the stub, it is a no-op and is reported as present. Otherwise the file is not ours: it is left untouched and reported, together with the PATH line for `<root>/bin`.
     - **`EXDEV`, `EPERM` or `ENOTSUP`** (no hard link possible): the step is skipped, with the same report and PATH line.
     - There is no temp file outside the root, no `mkdir` outside the root, no rename and no journal. A crash at any point leaves either nothing outside the root or a correct stub. Either converges on re-run, because a stub with equal bytes is a no-op.
+  - **Shared inode.** The two names are hard links to one file. If anyone edits the external file, `<root>/bin/.user-stub` changes too. Its hash then no longer matches the ledger, so uninstall keeps it and reports it under the normal root rule.
   - **Ledger.** `owned.json` records the external path with `kind: "external-report"` and its `dev`/`ino`. That record is used **only to report**. It grants no authority to delete or modify.
   - **Uninstall** never touches the external file. A full uninstall prints:
     `trajecta: left <user-bin>/trajecta in place; remove it yourself if you no longer want it`.
