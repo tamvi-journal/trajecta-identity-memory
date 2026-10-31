@@ -746,7 +746,7 @@ So the Windows wrappers delegate steps 1–4 of §13.3 to one **read-only** vali
     - If the highest committed generation is not valid (a modified, missing or symlinked file or directory), `trajecta plugin` and update **refuse for that plugin**. They make no write and no cleanup, and report `trajecta: plugin <name> was modified (<paths>); move those paths out of <root>/plugins/<name>/ and run trajecta plugin --profile … again`.
     - **Recovery is the owner's explicit action, and it works on whole generations (Lam P1-2).** The refusal tells the owner to move the **entire** `g<N>` directory out of `<root>/plugins/<name>/`.
       - On the next `trajecta plugin --profile …`, if the invalid highest committed generation's directory is **entirely absent**, one `owned.json` replace converts its four receipts into a single `{kind: "tombstone", plugin: <name>, generation: N}` entry. Then it builds `g<N+1>`.
-      - **A tombstone** grants no ownership and protects no bytes. It never counts as a committed generation, and its only use is the monotonic `N` above.
+      - **A tombstone** grants no ownership and protects no bytes. It never counts as a committed generation. It has exactly two uses: the high-water barrier for current selection ("Which generation is current" above) and the monotonic `N`.
       - If only part of `g<N>` was moved away (some paths absent, others present), the command still refuses and repeats the instruction. Receipts are never dropped one by one. Bytes still present that are not ours are never touched.
   - **User-facing path:** `<root>/plugins/<name>/g<N>/trajecta.plugin`, printed by `trajecta plugin` and `doctor`. A plugin already loaded into a client keeps working through the wrapper (§6).
   - **`trajecta plugin --db second.sqlite3`** builds a new generation from its own arguments, so the current record is always the last successfully accepted recipe. **`--out`** artifacts have no record and no generation, and are never rebuilt.
@@ -776,3 +776,29 @@ So the Windows wrappers delegate steps 1–4 of §13.3 to one **read-only** vali
   - The install `--db custom` case: the plugin's MCP `initialize` plus `identity_status` show the custom store, initialized, with the same path the CLI reports.
   - A profile-only plugin with `TRAJECTA_IDENTITY_DATA_DIR` set resolves the default name under that directory.
   - A Windows `--db` containing a cmd-special character is refused at build time.
+
+### 13.7 Windows PowerShell host effects, and the product repo's visibility (Codex STOP @ a82df09; Aux settlement 2026-10-31)
+
+**Repo visibility (amends §9 item 4 and the #43 settlement).** On 2026-10-31 Ty made `tamvi-journal/trajecta` public before cutover, so that CI can run; the account's private-repo Actions budget was exhausted. Nothing secret lives in the repo: the production trust anchor is empty, and no signing key or release environment exists. Q9 is unchanged: signing, the release workflow, tags and publishing still need Ty's explicit consent.
+
+**What "read-only" in §13.5 binds.** It binds the **validator script**: the script itself writes no file. Starting the pinned system `powershell.exe` makes the PowerShell host write its own per-user startup cache. That host effect is not a product write, and it happens identically for every PowerShell start on the machine. On the CI image (Windows Server 2025, image 20261021.278.1) the observed effect, even with `-NoLogo -NoProfile -NonInteractive`, is these paths under `%USERPROFILE%`:
+- `AppData\Local`
+- `AppData\Roaming`
+- `AppData\Local\Microsoft\Windows\PowerShell\StartupProfileData-NonInteractive`
+
+The product does not try to suppress the host's own cache. The wrappers add no environment variable or flag for this.
+
+**Test law.** This applies the 4b precedent (`test/bootstrap.test.ts`, Lam-approved at 6523fe3).
+1. Any Windows test that asserts an unchanged tree around a wrapper run first **pre-warms** the host. It runs the identical pinned `powershell.exe`, with the identical flags and the identical isolated environment, once with `-EncodedCommand` of a no-op script, and asserts exit 0.
+2. Only then does it take the baseline. The assertion around the real wrapper run stays **exact equality** of the whole tree: names and SHA-256, with no exclusions.
+3. **Characterization (one test).** On a fresh isolated home, the paths a single no-op start adds must be a subset of the three paths listed above. Any other path fails the test.
+4. **Stability check.** After the pre-warm, a second no-op start must leave the tree byte-identical.
+   - If the host rewrites `StartupProfileData-NonInteractive` with different bytes on every start, Codex stops and reports the evidence: the bytes and SHA-256 on two consecutive starts.
+   - Nothing is excluded from any comparator without a further settlement.
+
+**Diagnosis before change (Codex finding B).** In the controlled-frame table, the `NOTINSTALLED` and `NODEPATH` rows sometimes print the generic "cannot validate the installation" line instead of their own message. Before any product change, a **test-only** harness captures the validator's raw stdout bytes and its exit status for those rows. It runs the same encoded command directly, with no wrapper. The finding is then classed as one of three:
+- (a) the validator emits a different record;
+- (b) the PowerShell host fails or writes extra output;
+- (c) the cmd parser rejects a correct record.
+
+Only (c) or (a) changes product code, and either must keep the §13.5 parser exactness. No expected text is loosened.
