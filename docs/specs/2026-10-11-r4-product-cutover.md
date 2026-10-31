@@ -846,3 +846,55 @@ Only (c) or (a) changes product code, and either must keep the §13.5 parser exa
   - **Native M5:** the previously failing `NOTINSTALLED` and `NODEPATH` rows, and the good-framing stubs, run through the real `.cmd` with real padded validators, for one root of each original padding class: exactly one record and the exact refusal.
   - The diagnostic stubs that relied on `=` are replaced by renderer-produced payloads, so test inputs obey the same law as the product.
 - No parser, message, exit-code or framing rule is loosened. The `NODEPATH` row still needs a real 8.3-disabled fixture before M5 can be claimed (§13.5).
+
+### 13.9 Remaining 4c M5 gates (Codex STOPs M5-2, -3, -4, -8 @ 8d9a17b; Aux settlement 2026-10-31)
+
+Proven natively on Node 22 and 24, and **not** reopened by this section:
+- the real 8.3-disabled `NODEPATH` case and the short-path success case;
+- the 240-code-unit non-ASCII root, end to end;
+- engine ancestry: no PowerShell in the tree at engine start, and on POSIX the wrapper PID equals the Node PID;
+- a byte-exact MCP `initialize` through `cmd.exe /d /c` and through `/bin/sh`;
+- Constrained Language Mode failing closed.
+
+**M5-2: the fake-PowerShell canary.**
+- **Observation.** With a hostile runtime `SystemRoot`, the **real** pinned `powershell.exe` cannot load the managed host (`8009001d`). So the §13.7 pre-warm cannot run in that environment.
+- **Settlement.**
+  1. Pre-warm once, in the same isolated home, with the **real** `SystemRoot`.
+  2. Take the baseline.
+  3. Run both wrappers with `SystemRoot` pointing at the fake tree, which holds the marker-writing `powershell.exe`.
+- **Acceptance.**
+  - The marker **never** appears. That is the point of the pin.
+  - The wrapper ends in exactly one of two outcomes: the exact §13.5 fail-closed line with exit 1 and no Node started (expected, because the pinned host cannot load), or a correct `OK` run.
+  - The whole tree is exactly equal to the baseline.
+  - The unmanaged fake's sensitivity control (it writes its marker when invoked directly) stays in the test.
+
+**M5-3: AppLocker/WDAC.**
+- **Observation.** The hosted runner has no enforcing policy, and `AppIDSvc` is stopped.
+- **Narrow authorization.** One **dedicated, final** CI job on a GitHub-hosted, ephemeral Windows runner may:
+  - start `AppIDSvc`;
+  - apply a local AppLocker policy whose only deny rule targets the pinned `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` path. The job's own steps use `pwsh` (PowerShell 7), which is a different path.
+  - run both wrappers once, and assert the exact fail-closed line, exit 1, no Node started, and an unchanged tree.
+- **Limits.** This job runs only on hosted runners, never on a self-hosted or developer machine. It writes nothing back. There is no cleanup, because the VM is discarded.
+- **Fallback.** If enforcement cannot be established on the hosted image (rules not enforced after the service starts, or an enforcement reboot required), Codex records the raw evidence and STOPs. Then AppLocker/WDAC becomes an **M8 owner-rehearsal item**, and is not a substitute claim.
+
+**M5-4: a Node descendant holding an inherited pipe (declared limitation, both OSes).**
+- **Observation.** The validator's own bound holds: the wait timed out, the drain bound fired, `Dispose` completed, the exact `TRJ1|ERR|NODE|END` record was written, and PowerShell exited in about 4.5 s.
+- The wrapper still waits, because the probed binary's **descendant** inherited the wrapper's output pipe and keeps it open. `FOR /F` on Windows, and `$(…)` on POSIX, return only at EOF.
+- **Settlement.** The §13.5 bound is restated as binding the **validator process**, and it is proven. A probed Node binary that leaves a descendant holding inherited stdout can delay the wrapper for as long as that descendant lives. This is a **declared limitation**: such a binary is the very executable the wrapper would then run as the engine, so it gains nothing it did not already have.
+- No product handle-inheritance change is made in 4c.
+- M5 keeps the evidence test, with assertions:
+  - the validator-level markers;
+  - the exact record;
+  - PowerShell exits before the descendant is killed;
+  - EOF follows the descendant's death.
+  The "wrapper returns within about 12 s" expectation is **removed** for the descendant case only. It stays for a fake Node that hangs without a descendant.
+
+**M5-8: console Ctrl-C through `trajecta.cmd` (declared Windows limitation).**
+- **Observation, both runtimes, real console, `CTRL_C_EVENT` with installed `identity view`.**
+  - **Direct run:** the ready line, then exit 0 with no prompt.
+  - **Through `trajecta.cmd`:** the same ready line, then cmd's `Terminate batch job (Y/N)?`. Answering `Y` exits 255.
+- **Declared limitation (amends §2.3 "Wrappers must not add a parent back").** On Windows, an interactive console Ctrl-C reaches the engine exactly as in a direct run, and its output up to exit is identical. Then cmd asks `Terminate batch job (Y/N)?`. Answering `Y` makes the wrapper exit 255 instead of the engine's code.
+  - MCP clients start `trajecta-mcp.cmd` with piped stdio and no console prompt path, so the MCP server is not affected.
+  - POSIX has no such difference, because `sh` `exec`s Node.
+- **Before this is final, Codex also observes and records** the `N` answer and closing the console window (exit status and output), plus whether the engine process is gone after `Y` and after `N`. M8 re-checks the declared text on Ty's rehearsal machine if it runs Windows.
+- No wrapper change is made to hide the prompt. Any future change needs its own settlement.
