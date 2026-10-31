@@ -846,3 +846,79 @@ Only (c) or (a) changes product code, and either must keep the §13.5 parser exa
   - **Native M5:** the previously failing `NOTINSTALLED` and `NODEPATH` rows, and the good-framing stubs, run through the real `.cmd` with real padded validators, for one root of each original padding class: exactly one record and the exact refusal.
   - The diagnostic stubs that relied on `=` are replaced by renderer-produced payloads, so test inputs obey the same law as the product.
 - No parser, message, exit-code or framing rule is loosened. The `NODEPATH` row still needs a real 8.3-disabled fixture before M5 can be claimed (§13.5).
+
+### 13.9 Remaining 4c M5 gates (Codex STOPs M5-2, -3, -4, -8 @ 8d9a17b; Aux settlement 2026-10-31)
+
+Proven natively on Node 22 and 24, and **not** reopened by this section:
+- the real 8.3-disabled `NODEPATH` case and the short-path success case;
+- the 240-code-unit non-ASCII root, end to end;
+- engine ancestry: no PowerShell in the tree at engine start, and on POSIX the wrapper PID equals the Node PID;
+- a byte-exact MCP `initialize` through `cmd.exe /d /c` and through `/bin/sh`;
+- Constrained Language Mode failing closed.
+
+**M5-2: the fake-PowerShell canary (a specific, recorded exception to §13.7's same-environment pre-warm).**
+- **Observation.** With a hostile runtime `SystemRoot`, the **real** pinned `powershell.exe` cannot load the managed host (`8009001d`). So the §13.7 pre-warm cannot run in that environment.
+- **Order.**
+  1. **Sensitivity control.** Run the unmanaged fake `powershell.exe` directly. It must write its marker and exit 17. Then delete the marker.
+  2. **Pre-warm** once, in the same isolated home, with the real pinned host and the **real** `SystemRoot`.
+  3. Stage both wrappers and the fake tree.
+  4. Take a **fresh whole-tree baseline** after steps 2 and 3.
+  5. Run each wrapper with `SystemRoot` pointing at the fake tree, and with nothing else changed.
+- **Acceptance, for each wrapper.**
+  - The marker **never** appears. That is the point of the pin.
+  - Exactly one of two outcomes, and nothing else:
+    - the exact §13.5 fail-closed line, exit 1, and zero Node starts (expected, because the pinned host cannot load);
+    - a fully correct `OK` run.
+  - The whole tree is byte-equal to the step-4 baseline.
+- **Receipt.** The fixture receipt records the exact environment difference between the pre-warm and the canary run (the `SystemRoot` value and nothing else). This exception does not relax §13.7 for any other test.
+
+**M5-3: AppLocker (not WDAC).**
+- **Observation.** The hosted runner has no enforcing policy, and `AppIDSvc` is stopped.
+- **Why a lone deny rule is wrong.** AppLocker is allow-list based. Once the executable rule collection holds any rule, every executable not explicitly allowed is implicitly denied. A deny-only policy could therefore block `cmd.exe`, `pwsh`, Node and the harness too, and a failure would prove nothing.
+- **Narrow authorization.** One **dedicated, terminal** CI job on a GitHub-hosted, ephemeral Windows runner may:
+  - start `AppIDSvc`;
+  - apply a closed, test-only local AppLocker **executable** policy in **Enforce** mode (not Audit), with:
+    - explicit **allow** rules sufficient for `cmd.exe`, `pwsh`, the runner's Node and the harness;
+    - exactly **one deny** rule, for the pinned `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` path (deny overrides allow).
+- **Controls and assertions, in order.**
+  1. The effective policy is read back, and its bytes are recorded. Its mode is Enforce, and `AppIDSvc` is running.
+  2. **Positive control:** `cmd.exe`, `pwsh` and Node still launch.
+  3. **Negative control:** launching exactly the pinned `powershell.exe` is blocked, and the AppLocker event log holds the matching deny event for that path. The event is recorded.
+  4. Each wrapper then gives the exact generic fail-closed line, exit 1, zero Node starts, and an unchanged whole tree.
+- **Limits.**
+  - Hosted runners only, never a self-hosted or developer machine. No permanent change; the VM is discarded, so there is no cleanup.
+  - The job has `permissions: contents: read` only, and no secrets or write-capable tokens.
+  - It runs only for trusted sources: `push` and `workflow_dispatch` in this repository, and `pull_request` only when the head repository is this repository. It never runs code from a fork PR.
+  - It proves AppLocker only. It is never cited as WDAC evidence.
+- **Fallback.** If any step 1–3 cannot be established on the hosted image (rules not enforced after the service starts, or an enforcement reboot required), Codex records the raw evidence and STOPs. AppLocker then becomes an **M8 owner-rehearsal item**, and nothing is claimed in its place.
+
+**M5-4: a Node descendant holding an inherited pipe — LIMITATION: UNBOUNDED WRAPPER (validator bounded).**
+- **Observation.** The validator's own bound holds: the wait timed out, the drain bound fired, `Dispose` completed, the exact `TRJ1|ERR|NODE|END` record was written, and PowerShell exited in about 4.5 s.
+- The wrapper still waits, because the probed binary's **descendant** inherited the wrapper's output pipe and keeps it open. `FOR /F` on Windows, and `$(…)` on POSIX, return only at EOF. The validator has already refused that binary, so the engine is never launched, yet the caller can wait for as long as the descendant lives. This is a real availability defect in that path, not an accounting detail.
+- **Owner decision.** On 2026-10-31 Ty accepted this as a known limitation, recorded in the release notes, with the full fix deferred to later work.
+- **Settlement.** M5-4 is reported as **LIMITATION / UNBOUNDED WRAPPER**, never as a passed bounded-wrapper gate.
+  - The §13.5 bound binds the **validator process**, and that is proven.
+  - A malformed or hostile Node at the configured path that leaves a descendant holding inherited stdout can stall the wrapper until that descendant ends.
+  - The residual risk is carried into M8 and into the release notes.
+  - A bounded wrapper (closing the pipe-lifetime gap while keeping early stdout/stderr isolation and the one-record parser) stays open as later work, and needs its own settlement.
+- No product handle-inheritance change is made in 4c.
+- **M5 tests for the descendant case** assert:
+  - exactly one `TRJ1|ERR|NODE|END` record;
+  - the validator exits before the descendant is killed;
+  - the Node engine is **never** launched;
+  - no leaked bytes on either stream;
+  - EOF and a clean wrapper return follow the descendant's termination;
+  - every test PID is cleaned up.
+- The independent bound stays: a fake Node that hangs **without** a descendant must still make the wrapper return within about 12 s.
+
+**M5-8: console Ctrl-C through `trajecta.cmd` (declared Windows limitation; open evidence gate).**
+- **Observation, both runtimes, real console, `CTRL_C_EVENT` with installed `identity view`.**
+  - **Direct run:** the ready line, then exit 0 with no prompt.
+  - **Through `trajecta.cmd`:** the same ready line, then cmd's `Terminate batch job (Y/N)?`. Answering `Y` exits 255.
+- **Declared limitation (amends §2.3 "Wrappers must not add a parent back").** On Windows, an interactive console Ctrl-C reaches the engine exactly as in a direct run, and its output up to exit is identical. Then cmd asks `Terminate batch job (Y/N)?`. Answering `Y` makes the wrapper exit 255 instead of the engine's code. POSIX has no such difference, because `sh` `exec`s Node.
+- **M5-8 is an open gate, not a parity pass.** It is final only when these receipts exist, on both runtimes:
+  - the `N` answer, and closing the console window: exit status and output for each;
+  - whether the engine process is gone after `Y`, after `N`, and after the window closes;
+  - a non-interactive `trajecta-mcp.cmd` check with piped stdio: the MCP `initialize` round-trip, then stdin closed, then the exit status, stdout/stderr bytes and engine-PID liveness, compared with the same sequence run directly. "MCP is unaffected" may be stated only if this check shows parity.
+- The Y/N prompt and the exit-code difference appear in the 4c acceptance summary and the user-facing limitations, never as an ordinary green parity test. M8 re-checks the declared text on Ty's rehearsal machine if it runs Windows.
+- No wrapper change is made to hide the prompt. Any future change needs its own settlement.
