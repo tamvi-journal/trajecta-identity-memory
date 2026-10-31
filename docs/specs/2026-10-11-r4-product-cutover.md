@@ -821,3 +821,28 @@ The finding is then classed as one of three:
 - (c) the cmd parser rejects a correct record.
 
 Only (c) or (a) changes product code, and either must keep the §13.5 parser exactness. **A (b) result is a STOP with concrete provenance** (the bytes, the status, the image and the run id), never "resolved, no action". No expected text, message or exit code is loosened.
+
+### 13.8 Windows cold-start inventory per root, and no `=` in the encoded validator (Codex STOP @ 86e9c23; Aux settlement 2026-10-31)
+
+**A: the inventory is defined per known-folder root.** The §13.7 test environment isolates `%USERPROFILE%` to `<home>`, `%LOCALAPPDATA%` to `<home>\local` and `%APPDATA%` to `<home>\roaming`. On image 20261021.278.1 (and on 20261030.294.1, Node 24.22.2), the host resolves some cache paths through the profile and others through the `%LOCALAPPDATA%` environment variable. Two-start byte stability holds in all four observations (cache file 64 B, SHA-256 `a7de5177…5f65cf`). The closed typed inventory of §13.7 item 3 is therefore the **union of two rooted lists**. It is still closed and typed, and still bounded to the observed image and environment:
+- **Under `%USERPROFILE%`:** the seven entries of §13.7, unchanged.
+- **Under the directory named by `%LOCALAPPDATA%`:** that directory itself (dir), `Microsoft` (dir), `Microsoft\Windows` (dir) and `Microsoft\Windows\Caches` (dir). These are directories only. A file anywhere in this list fails the test.
+- Paths are matched after resolving each root from the **test's own** environment values, not from fixed strings, so the two lists stay correct if the isolation layout changes.
+- Everything else from §13.7 is unchanged: an empty home and a home with pre-created ancestors, new entries a subset, pre-existing entries unchanged, the second-start stability check, full-tree exact equality after the pre-warm with no exclusions, and STOP on any divergence.
+
+**B: the encoded validator never contains `=`.** Inside a `FOR /F` command string, cmd treats `=` (like `,` and `;`) as a token delimiter. Base64 padding therefore broke the `-EncodedCommand` argument, and PowerShell printed its usage text instead of running.
+- Codex proved this natively, 16 of 16 cases across Node 22/24, the CLI and MCP wrappers, and the `NOTINSTALLED` and `NODEPATH` rows. Each one-variable intervention (padding removed, or `=` escaped in the `FOR` line only) restored exactly one record and the exact refusal.
+- The base64 alphabet contains no `,` or `;`, so `=` is the only one of these three delimiters that can occur in the encoded validator.
+- Real installs hit this whenever the validator's UTF-16LE length is not a multiple of 3, which depends on the root path. A 33-character root produced one `=`.
+
+**Rules:**
+- **Renderer (amends §13.6 "Renderer").** After rendering `validator.ps1`, append `k` ASCII spaces (`k` ∈ {0, 1, 2}, the smallest that works) so that its UTF-16LE byte length is a multiple of 3. Then encode. Trailing spaces do not change PowerShell semantics.
+  - The renderer **refuses** with a typed error if the resulting base64 contains `=`, `,` or `;`.
+  - The no-op pre-warm script used in tests follows the same rule.
+- **Template unchanged.** The `FOR /F` line is not rewritten with `^=`. The guarantee lives in one place, the renderer, and it is checked at render time.
+- **Tests:**
+  - **Goldens:** roots whose unpadded length would give one and two `=`, plus the existing token-literal root. Each golden is regenerated and contains no `=`.
+  - **Property test:** about 1000 deterministic pseudo-random roots of mixed ASCII, non-ASCII and length up to 240. Every render is free of `=`, `,` and `;`, and each line stays at most 8000 characters.
+  - **Native M5:** the previously failing `NOTINSTALLED` and `NODEPATH` rows, and the good-framing stubs, run through the real `.cmd` with real padded validators, for one root of each original padding class: exactly one record and the exact refusal.
+  - The diagnostic stubs that relied on `=` are replaced by renderer-produced payloads, so test inputs obey the same law as the product.
+- No parser, message, exit-code or framing rule is loosened. The `NODEPATH` row still needs a real 8.3-disabled fixture before M5 can be claimed (§13.5).
