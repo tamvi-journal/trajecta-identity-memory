@@ -457,7 +457,7 @@ Updates reuse the install machinery exactly: Phase A/B/C (§5.2), a versioned ro
 
 ### 12.3 Gates added
 
-- **M2:** signed metadata (valid, tampered, wrong key, rotated key with chain, rotated key without chain, rotation remembered after `--rollback`); sequence replay and expiry; replay attempted after `--rollback`, after `uninstall --version` + reinstall, and after a crash at each update-state write; missing and corrupt update state fail closed; `--reset-state` sets the floor from installed MANIFESTs exactly, and the test pins that an index between that floor and the previously seen higher sequence is accepted only after the typed reset, never without it; downgrade and same-version refusal; compatibility preflight refusal; TTY-only product `migrate-to --using` after an update (the product guard, not the engine).
+- **M2:** signed metadata (valid, tampered, wrong key, rotated key with chain, rotated key without chain, rotation remembered after `--rollback`); sequence replay and expiry; replay attempted after `--rollback`, after `uninstall --version` + reinstall, and after a crash at each update-state write; missing and corrupt update state fail closed; `--reset-state` takes the installed MANIFESTs' highest `index_sequence` as the exact **minimum** (`manifest_floor`) and writes `floor = max(manifest_floor, accepted index sequence)` (§14.4, Lam #55 round 4), and the test pins that an index between that floor and the previously seen higher sequence is accepted only after the typed reset, never without it; downgrade and same-version refusal; compatibility preflight refusal; TTY-only product `migrate-to --using` after an update (the product guard, not the engine).
 - **M3:** crashes at every Phase A/B/C boundary during an update, and around the update-state write; the exact order in 12.2, asserting that `current` never names an incompatible version; `migrate-to --using` from a staged target, a migration failure, and a crash between migration and switch followed by a converging re-run; re-run convergence; rollback, and its refusal after a migration.
 - **M5:** the plugin wrapper keeps working across an update without a rebuild.
 - **M3 (uninstall, F41-5):** `update-state.json` survives `uninstall --version`, `--rollback`, a refused or non-TTY full uninstall, a full uninstall where another removal failed, and a symlink at that path; it is removed only by a confirmed full uninstall with no version left.
@@ -1027,6 +1027,7 @@ This section changes **only** the console-window-close receipt that §13.9 M5-8 
      The write happens immediately, before staging, and therefore before any `current` switch. A staged version always implies a written state. `update --check` never writes.
 
 **Other writers.**
+- **A staged release cannot outrun its index.** On the update path, once the staged release's `MANIFEST.json` has verified, its `index_sequence` must be `<=` the sequence of the index that authorized it, whether a verified or a known index. Otherwise `update` refuses before raising the floor, so staging can never push the floor past the index a crash re-run will present.
 - **`install` and staging raise `floor` only.** Once a release's `MANIFEST.json` has verified, `floor` becomes `max(floor, index_sequence)`. `accepted` and `rotations` are untouched. This is the case Lam traced: after I10 is accepted, an install with `index_sequence` 20 sets the floor to 20. A later fetch of the same I10 then fails at step 3, and I21 is accepted normally.
 - Every write uses temp file + fsync + atomic rename, under the install lock, with a crash-test checkpoint at each boundary.
 
@@ -1045,14 +1046,15 @@ This section changes **only** the console-window-close receipt that §13.9 M5-8 
 - No released 0.x root exists without a state, because no release has ever been published, so 4d needs no migration of older roots.
 
 **`--reset-state`: a human trust reset (§12.2).** It runs only on a TTY, after the typed confirmation `RESET UPDATE STATE`, and it prints the §12.2 honest-limit sentence first. It rebuilds the state from scratch:
-- `floor` = the largest `index_sequence` among the installed versions' verified `MANIFEST.json` files.
+- `manifest_floor` = the largest `index_sequence` among the installed versions' verified `MANIFEST.json` files. It is the minimum the reset may trust, not necessarily the final floor.
 - `rotations` are rebuilt by walking the fetched index's `rotations` from the embedded key. Every index carries the complete rotation history, and the publish policy must keep it so.
   - Each statement must be signed by its `from` key and chain from the embedded key, in order.
   - **Signer point (Lam #55, P1-2).** The index must verify under the key reached by walking only the statements whose `sequence` is **lower** than the index's own `sequence`. Those are the rotations that earlier indexes introduced. The statements this index introduces (sequence equal to its own) are applied **after** its signature has verified. This matches the normal path, where an index is signed by the key current before its own rotations.
   - So a K0-signed I1 that introduces K0→K1 verifies under K0 and leaves K1 as the newest key. A K1-signed I2 verifies under K1 after walking K0→K1.
   - A broken chain, a forged statement, or a statement whose `sequence` is higher than the index's own fails, and nothing is written.
   - The confirmation text says this trusts the published rotation history as it stands.
-- `accepted` = that fetched index, whose sequence must be `>= floor`.
+- The fetched index's sequence must be `>= manifest_floor`. After it has passed freshness, signature and the rotation checks, a **single** atomic state write commits all of: `accepted = {sequence, index_sha256}`, `floor = max(manifest_floor, accepted.sequence)`, and the rebuilt rotations. So `accepted.sequence <= floor` always holds (Lam #55 round 4).
+- A reset may still land below a higher sequence the machine once saw but never installed. That is the §12.2 honest limit, and it is printed before the prompt.
 - If anything fails, nothing is written.
 
 **Untouched by:** `--rollback`, `uninstall --version`, a refused or non-TTY full uninstall, and a full uninstall that leaves any version behind (F41-5).
@@ -1075,6 +1077,9 @@ This section changes **only** the console-window-close receipt that §13.9 M5-8 
 - **Reset:**
   - `--reset-state` sets the floor from the installed MANIFESTs exactly and rebuilds the rotations from the embedded key.
   - Against a still-current K0-signed I1 that introduces K1, the reset recovers, K1 is newest, and a later K1-signed I2 is accepted.
+  - Installed A has `index_sequence` 10, and the fetched I20 has sequence 20. The reset yields a **readable** state with floor 20 and `accepted` 20. `update --check` on I20 then succeeds with no write, and I19 is refused as a replay.
+  - A reset at I10 with `manifest_floor` 10 yields floor 10 and `accepted` 10.
+  - When a higher sequence was seen earlier but never installed, a reset to the newest I20 still succeeds, and the honest-limit text is shown.
   - Forged, broken, out-of-order and higher-`sequence` statements are refused.
   - Nothing is written on any failure.
 - **Temp recovery:**
