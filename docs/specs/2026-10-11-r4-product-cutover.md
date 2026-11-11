@@ -958,7 +958,7 @@ This section changes **only** the console-window-close receipt that §13.9 M5-8 
 - **One pinned source, in code.** `product/src/update-source.ts` exports the base URL `https://github.com/tamvi-journal/trajecta/releases`. A reviewed PR is the only way to change it, and the test seam may replace it, the same way it replaces `trust.ts`.
 - **The index** is fetched from `<base>/latest/download/index.json` and `index.json.sig`. Every published release carries the newest index as two assets, so "latest" always serves it. Nothing is a mutable asset.
 - **A release's files** are fetched from `<base>/download/v<version>/`: `release.json`, `release.json.sig`, `trajecta-<version>.tar.gz` and `trajecta-extract.mjs`. These are the same four files `install --release` already verifies.
-- **Transport.** Node's built-in `fetch`, `https:` only, at every hop. Redirects may go only to `github.com`, `objects.githubusercontent.com` and `release-assets.githubusercontent.com`. Hard size caps: 1 MiB for the index, 64 KiB for `release.json`, and for the tarball the size its signed `release.json` states, which must also be at most 256 MiB. There is a 60 s per-file timeout. Every byte is written into a fresh staging directory under `<root>` and is verified before use. Transport is never trusted; only signatures and digests are.
+- **Transport.** Node's built-in `fetch`, `https:` only, at every hop. Redirects may go only to `github.com`, `objects.githubusercontent.com` and `release-assets.githubusercontent.com`. Hard size caps: 1 MiB for the index, 64 KiB for `release.json`, and for the tarball the size its signed `release.json` states, which must also be at most 256 MiB. There is a 60 s per-file timeout. For a mutating `update`, every byte is written into a fresh staging directory under `<root>` and is verified before use. `update --check` fetches only the index and its signature, and buffers them **in memory** within the caps. It creates no staging directory, cache, temp file or lock file. The whole tree under `<root>` is byte-identical before and after it, and M2 asserts that with a full-tree hash. Transport is never trusted; only signatures and digests are.
 - **Offline or proxied machines.** `update --from <dir>` reads the same layout from a local directory: `<dir>/index.json`, `<dir>/index.json.sig` and `<dir>/v<version>/…`. It is verified exactly as the network path, with no shortcut. The README says that Node's `fetch` does not use `HTTPS_PROXY` unless Node's own proxy option is enabled, and that `--from` is the supported route around that.
 
 ### 14.2 The signed index (`trajecta.index/v1`)
@@ -994,7 +994,7 @@ This section changes **only** the console-window-close receipt that §13.9 M5-8 
 - **A rotation statement** is `{schema: "trajecta.rotation/v1", from: <SPKI base64>, to: <SPKI base64>, sequence: <the index sequence that introduces it>, signature: <Ed25519 by from over the canonical JSON of the other four fields>}`.
 - **Acceptance.**
   1. The client first verifies the whole index with its **current** newest key. A rotation is accepted only from an index signed by the currently trusted key (§12.2 "shipped inside a release the current key signed").
-  2. It then walks `rotations` in order. Statements already in the state are skipped by exact bytes. It accepts any other statement only if `from` equals the current newest key and the statement's signature verifies. Every index carries the complete rotation history.
+  2. It then walks `rotations` in order. Statements already in the state are skipped by exact bytes. It accepts any other statement only if all three hold: `from` equals the current newest key; the statement's `sequence` equals this index's `sequence`, because an index introduces only its own rotations; and the statement's signature verifies. Every index carries the complete rotation history, and each statement keeps the `sequence` of the index that introduced it.
   3. Accepted statements are appended to the state, and later statements continue from the new key.
 - An index that the current key cannot verify fails closed, even if it names a valid chain. The one exception is the already-accepted index, matched by its digest at §14.4 step 4, after the freshness and floor checks. No older key in the chain is ever used to verify a **new** index. A chain persisted in the state that does not verify from the embedded key also fails closed.
 
@@ -1031,10 +1031,15 @@ This section changes **only** the console-window-close receipt that §13.9 M5-8 
 - Every write uses temp file + fsync + atomic rename, under the install lock, with a crash-test checkpoint at each boundary.
 
 **Creation: only on a provably fresh root (Lam #55 re-review, P1-1).**
-- `install` may create the state **only** when, at the moment it holds the install lock, `<root>` contains nothing except the lock: no `current`, no `owned.json`, no version directory and no `.planned.json`.
+- **The state temp file.** `update-state.json.tmp` is the product-reserved temp name used by `atomic()`. Every state write happens under the install lock, so if the temp file exists while the lock is held, it can only be the remains of a write that crashed before its rename.
+  - Before any state write, and before the fresh-root test, the writer removes it, but only if it is a regular file (not a symlink, directory or reparse point) directly in `<root>`. Its contents are never read or trusted.
+  - Any other kind of entry at that path makes the command refuse, with the path named.
+  - No other file is ever deleted by this rule.
+- `install` may create the state **only** on a fresh root. A root is fresh when, at the moment install holds the lock and has cleared the temp file as above, `<root>` contains nothing except the lock's own artifacts (`.lock` and the lock temps that `install-lock.ts` already owns): no `current`, no `owned.json`, no version directory and no `.planned.json`.
   - It then writes the state as the **first** write of the transaction, before any staging, with `floor` = the release's `index_sequence`, `accepted: null` and no rotations.
-  - A crash after that write leaves a valid state, and a re-run converges.
-  - A crash before it leaves the root still fresh.
+  - A crash after the rename leaves a valid state, and a re-run converges.
+  - A crash after the temp fsync but before the rename leaves only `update-state.json.tmp`. The next run clears it under the lock (an expired lock is reclaimed by the existing rules), finds the root fresh, and writes the same initial state.
+  - A crash before the temp write leaves the root fresh.
 - **Every other root with no state has lost its state**, and that includes any root holding `current`, `owned.json`, a version directory or a `.planned.json`. On such a root, `install` (and reinstall), `update` and `update --check` **all** refuse, write nothing, and print `trajecta update --reset-state`. A corrupt state is refused the same way by all four.
 - Absence alone never proves a fresh root; only the empty-root test does.
 - No released 0.x root exists without a state, because no release has ever been published, so 4d needs no migration of older roots.
@@ -1042,8 +1047,10 @@ This section changes **only** the console-window-close receipt that §13.9 M5-8 
 **`--reset-state`: a human trust reset (§12.2).** It runs only on a TTY, after the typed confirmation `RESET UPDATE STATE`, and it prints the §12.2 honest-limit sentence first. It rebuilds the state from scratch:
 - `floor` = the largest `index_sequence` among the installed versions' verified `MANIFEST.json` files.
 - `rotations` are rebuilt by walking the fetched index's `rotations` from the embedded key. Every index carries the complete rotation history, and the publish policy must keep it so.
-  - Each statement must be signed by its `from` key and chain from the embedded key.
-  - The index must then verify under the newest key reached.
+  - Each statement must be signed by its `from` key and chain from the embedded key, in order.
+  - **Signer point (Lam #55, P1-2).** The index must verify under the key reached by walking only the statements whose `sequence` is **lower** than the index's own `sequence`. Those are the rotations that earlier indexes introduced. The statements this index introduces (sequence equal to its own) are applied **after** its signature has verified. This matches the normal path, where an index is signed by the key current before its own rotations.
+  - So a K0-signed I1 that introduces K0→K1 verifies under K0 and leaves K1 as the newest key. A K1-signed I2 verifies under K1 after walking K0→K1.
+  - A broken chain, a forged statement, or a statement whose `sequence` is higher than the index's own fails, and nothing is written.
   - The confirmation text says this trusts the published rotation history as it stands.
 - `accepted` = that fetched index, whose sequence must be `>= floor`.
 - If anything fails, nothing is written.
@@ -1065,7 +1072,15 @@ This section changes **only** the console-window-close receipt that §13.9 M5-8 
 - **Persistence:**
   - `--rollback` and `uninstall --version` preserve the floor, `accepted` and the rotations;
   - full uninstall removes the state only under F41-5.
-- **Reset:** `--reset-state` sets the floor from the installed MANIFESTs exactly, rebuilds the rotations from the embedded key, and writes nothing on any failure.
+- **Reset:**
+  - `--reset-state` sets the floor from the installed MANIFESTs exactly and rebuilds the rotations from the embedded key.
+  - Against a still-current K0-signed I1 that introduces K1, the reset recovers, K1 is newest, and a later K1-signed I2 is accepted.
+  - Forged, broken, out-of-order and higher-`sequence` statements are refused.
+  - Nothing is written on any failure.
+- **Temp recovery:**
+  - kill after the temp fsync and before the rename on a fresh root; restart with an expired lock; the run converges, with the correct initial floor;
+  - a non-regular entry (symlink or directory) at `update-state.json.tmp` is refused and not deleted;
+  - an orphan temp next to a valid state is cleared only under the lock.
 
 ### 14.5 Artifact additions
 
