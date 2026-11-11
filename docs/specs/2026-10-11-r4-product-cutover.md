@@ -994,37 +994,78 @@ This section changes **only** the console-window-close receipt that §13.9 M5-8 
 - **A rotation statement** is `{schema: "trajecta.rotation/v1", from: <SPKI base64>, to: <SPKI base64>, sequence: <the index sequence that introduces it>, signature: <Ed25519 by from over the canonical JSON of the other four fields>}`.
 - **Acceptance.**
   1. The client first verifies the whole index with its **current** newest key. A rotation is accepted only from an index signed by the currently trusted key (§12.2 "shipped inside a release the current key signed").
-  2. It then walks `rotations` in order. It accepts a statement only if `from` equals the current newest key and the statement's signature verifies.
+  2. It then walks `rotations` in order. Statements already in the state are skipped by exact bytes. It accepts any other statement only if `from` equals the current newest key and the statement's signature verifies. Every index carries the complete rotation history.
   3. Accepted statements are appended to the state, and later statements continue from the new key.
-- An index that the current key cannot verify fails closed, even if it names a valid chain. The one exception is the already-accepted index, matched by its digest (§14.4). No older key in the chain is ever used to verify a **new** index. A chain persisted in the state that does not verify from the embedded key also fails closed.
+- An index that the current key cannot verify fails closed, even if it names a valid chain. The one exception is the already-accepted index, matched by its digest at §14.4 step 4, after the freshness and floor checks. No older key in the chain is ever used to verify a **new** index. A chain persisted in the state that does not verify from the embedded key also fails closed.
 
 ### 14.4 `update-state.json`
 
 - **Path.** Exactly `<root>/update-state.json`: a regular file, never a symlink. Uninstall already treats it this way (4b, §5.4 F41-5).
-- **Bytes.** Line 1 is the canonical JSON `{"schema":"trajecta.update-state/v1","sequence":<n>,"index_sha256":<hex of the exact accepted index.json bytes>,"rotations":[…accepted statements…]}`. Line 2 is `sha256:<hex of line 1's bytes>`. Each line ends in `\n`. Anything else is corrupt.
-- **Writes.**
-  - The file is written only under the install lock, by temp file + fsync + atomic rename. Each boundary has a checkpoint for the crash tests.
-  - On `update`, it is written immediately after the new index has fully verified, before staging, and therefore before any `current` switch. A staged version therefore always implies a written state.
-  - The new sequence must be `>=` the stored one. A lower one is refused as a replay, and nothing is written.
-  - **The already-accepted index.** An index whose SHA-256 equals the stored `index_sha256` is the index this machine already verified and recorded. It is accepted as known: its signature is not checked again, its rotations are not applied again, and the state is not rewritten. It is **not** exempt from freshness: an expired known index fails closed, exactly like a fresh one. This is how a re-run after a crash converges. It is also how `update` and `update --check` keep working when the newest published index is still the one, signed by the old key, that introduced a rotation the state has already persisted (§14.3).
-  - Any **other** index with the stored sequence is refused as a conflicting index, with nothing written.
-- **Install creates the state (Lam P1-1 on #55).** There is no "first update" special case. `install` writes the initial state when none exists:
-  - Line 1 is `{"schema":"trajecta.update-state/v1","sequence":<the installed release's MANIFEST index_sequence>,"index_sha256":null,"rotations":[]}`. The sequence comes from a release that `install` has already verified (signed `release.json` → SHA-256 → `MANIFEST.json`), so it is trusted.
-  - `install` writes it with the same temp + fsync + rename, under the install lock, **before** the `current` pointer write. A crash before that write leaves no `current`, and re-running install converges.
-  - If a state already exists and is valid, `install` raises its sequence to the installed release's `index_sequence` when that is higher. It never lowers it, and leaves `index_sha256` and `rotations` unchanged. If a state exists and is corrupt, `install` refuses with the `--reset-state` recovery and writes nothing.
-  - `index_sha256: null` is valid only in a state that no index has touched yet. The first verified index replaces it.
-  - No released 0.x root exists without a state: no release has ever been published, and the 4b/4c roots are test-only. So 4d needs no migration of older roots.
-- **Missing or corrupt state.**
-  - With a valid `current`, a missing state can only mean the state was lost. A state that does not parse, or fails its sha256 line, is corrupt. In both cases `update` and `update --check` refuse and print `trajecta update --reset-state`, as §12.2 says.
-  - The typed confirmation text is `RESET UPDATE STATE`, the same as uninstall. The honest-limit sentence of §12.2 is printed before the prompt.
-  - There is no silent re-creation, and no ledger kind is added for this. `owned.json` keeps its existing entry kinds, and `update-state.json` stays outside `owned.json`, exactly as §5.4 F41-5 and the merged uninstall code expect.
-- **Required cases (M2/M3):**
-  - crash before and after install's state write;
-  - crash before and after each update state write;
-  - compatibility refused after the state write: the state stays, and a re-run converges;
-  - `uninstall --version` of a staged or of an old version: the state is untouched;
-  - a missing or corrupt state after a successful update: refusal, then a typed reset;
-  - a full uninstall removes the state only under the F41-5 exception.
+
+**Data model (Lam #55 re-review, P1-2).**
+- **Bytes.** Line 1 is the canonical JSON
+
+  `{"schema":"trajecta.update-state/v2","floor":<n>,"accepted":<null or {"sequence":<n>,"index_sha256":<hex>}>,"rotations":[…accepted statements…]}`
+
+  Line 2 is `sha256:<hex of line 1's bytes>`. Each line ends in `\n`. Anything else is corrupt, as is `accepted.sequence > floor`.
+- **`floor`** is the monotonic high-water mark. It is the largest sequence this machine has ever trusted, from either source: an accepted index, or the verified `MANIFEST.json` `index_sequence` of any release installed or staged here. It never decreases, except through `--reset-state` (below) or the F41-5 full-uninstall exception.
+- **`accepted`** pairs the sequence and the digest of the one index this machine last verified in full. The two are written and replaced together, never one without the other. `accepted` is `null` until the first index is verified.
+- **`rotations`** holds the accepted rotation statements (§14.3).
+
+**How `update` and `update --check` decide.** The steps run in this order. The first failing step decides, and nothing is written on a refusal.
+  1. Parse the fetched index's bytes and fields (§14.2).
+  2. **Freshness:** `expires` must be later than the local clock.
+  3. **Floor:** the index `sequence` must be `>= floor`. Otherwise refuse it as a replay. This comes **before** recognition of the known index, so a known index below the floor is refused too.
+  4. **Known index:** if `accepted` is not null and the index digest equals `accepted.index_sha256`, accept it as known. Its signature is not checked again, its rotations are not applied again, and the state is not rewritten.
+  5. **Conflict:** if the index sequence equals `accepted.sequence` but the digest differs, refuse it as a conflicting index.
+  6. **Full verification:** verify the signature with the newest trusted key, then the rotations (§14.3).
+  7. **Write (`update` only):**
+     - `accepted` becomes `{sequence, index_sha256}`;
+     - `floor` becomes `max(floor, sequence)`;
+     - the new rotations are appended.
+     
+     The write happens immediately, before staging, and therefore before any `current` switch. A staged version always implies a written state. `update --check` never writes.
+
+**Other writers.**
+- **`install` and staging raise `floor` only.** Once a release's `MANIFEST.json` has verified, `floor` becomes `max(floor, index_sequence)`. `accepted` and `rotations` are untouched. This is the case Lam traced: after I10 is accepted, an install with `index_sequence` 20 sets the floor to 20. A later fetch of the same I10 then fails at step 3, and I21 is accepted normally.
+- Every write uses temp file + fsync + atomic rename, under the install lock, with a crash-test checkpoint at each boundary.
+
+**Creation: only on a provably fresh root (Lam #55 re-review, P1-1).**
+- `install` may create the state **only** when, at the moment it holds the install lock, `<root>` contains nothing except the lock: no `current`, no `owned.json`, no version directory and no `.planned.json`.
+  - It then writes the state as the **first** write of the transaction, before any staging, with `floor` = the release's `index_sequence`, `accepted: null` and no rotations.
+  - A crash after that write leaves a valid state, and a re-run converges.
+  - A crash before it leaves the root still fresh.
+- **Every other root with no state has lost its state**, and that includes any root holding `current`, `owned.json`, a version directory or a `.planned.json`. On such a root, `install` (and reinstall), `update` and `update --check` **all** refuse, write nothing, and print `trajecta update --reset-state`. A corrupt state is refused the same way by all four.
+- Absence alone never proves a fresh root; only the empty-root test does.
+- No released 0.x root exists without a state, because no release has ever been published, so 4d needs no migration of older roots.
+
+**`--reset-state`: a human trust reset (§12.2).** It runs only on a TTY, after the typed confirmation `RESET UPDATE STATE`, and it prints the §12.2 honest-limit sentence first. It rebuilds the state from scratch:
+- `floor` = the largest `index_sequence` among the installed versions' verified `MANIFEST.json` files.
+- `rotations` are rebuilt by walking the fetched index's `rotations` from the embedded key. Every index carries the complete rotation history, and the publish policy must keep it so.
+  - Each statement must be signed by its `from` key and chain from the embedded key.
+  - The index must then verify under the newest key reached.
+  - The confirmation text says this trusts the published rotation history as it stands.
+- `accepted` = that fetched index, whose sequence must be `>= floor`.
+- If anything fails, nothing is written.
+
+**Untouched by:** `--rollback`, `uninstall --version`, a refused or non-TTY full uninstall, and a full uninstall that leaves any version behind (F41-5).
+
+**Required cases (M2/M3):**
+- **Floor and known index:**
+  - I10 accepted, then a K0-signed install with `index_sequence` 20, then the same I10 fetched again: refused at the floor;
+  - I21 accepted after that;
+  - a known index refused once it expires.
+- **Lost or corrupt state:**
+  - missing state with `current` A, then a reinstall of a K0 candidate whose floor is 10: refused by install, update and check;
+  - corrupt state, then a reinstall: refused.
+- **Crashes:**
+  - on both sides of the fresh-root state write, and of the first pointer write;
+  - on both sides of each update state write;
+  - compatibility refused after the state write, then a re-run that converges.
+- **Persistence:**
+  - `--rollback` and `uninstall --version` preserve the floor, `accepted` and the rotations;
+  - full uninstall removes the state only under F41-5.
+- **Reset:** `--reset-state` sets the floor from the installed MANIFESTs exactly, rebuilds the rotations from the embedded key, and writes nothing on any failure.
 
 ### 14.5 Artifact additions
 
@@ -1057,7 +1098,7 @@ This section changes **only** the console-window-close receipt that §13.9 M5-8 
 ### 14.7 Staging, switching and the ledger
 
 - **Staging reuses the installer.** Phase A and the Phase B rename run with a new internal flag that never writes `current`. The staged directory is `<root>/<target>/` with its own `node` file. Its ledger entries are ordinary `file` and `directory` receipts, exactly as `install` writes them. No new ledger kind is added. The version stays **inactive** because `current` does not name it.
-- **Switch.** On compatible: write `update-state.json`, then the atomic two-line `current` (`<target>\n<previous>\n`), then Phase C and doctor, exactly as install.
+- **Switch.** On compatible: the state was already written at §14.4 step 7, and staging raised the floor. Write the atomic two-line `current` (`<target>\n<previous>\n`), then run Phase C and doctor, exactly as install.
 - **Plugins and wrappers are not rebuilt by default.** The `bin/` wrappers, the user-bin stub and every plugin read `current` at run time, so they follow the switch (§12.3 M5). Per §13.6, if the target's plugin builder would produce different bytes from a recipe, `update` rebuilds verbatim from the recipe as a new generation. Otherwise it skips entirely. 4d asserts the skip case on the 4d fixtures and tests the rebuild path with a fixture whose builder bytes differ.
 - **An inactive staged version** (refused compatibility, or waiting for `migrate-to`) is removed by the next `update` that targets a different version, or by `uninstall --version <v>`. Both paths go through the existing owned-path rules.
 - **Direction.** The ordering is SemVer 2.0 precedence. A target lower than the active version is refused (`downgrade refused; use --rollback`). A target equal to it writes nothing and exits 0 with `already at <v>`.
