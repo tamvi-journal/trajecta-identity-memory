@@ -1168,14 +1168,18 @@ Codex's read-only preflight raised one STOP on each of §14.6 (work), §14.4 and
   - If the two **differ**, `update` refuses with `work schema change (<a> → <b>) is not supported by this update; nothing changed`. Supporting it needs a public read-only work probe, pinned through a new work-repo tag, and its own settlement.
 - No product code parses work state. The README states the rule.
 
-**P4d-2: §14.4 install seeding vs the 4b install → uninstall tests.**
-- **Pristine state.** A state is pristine when `accepted` is `null` and `rotations` is empty. It records only the `floor` that installed MANIFESTs gave it. That information disappears with the versions and comes back from any reinstall. A pristine state holds no anti-replay memory beyond what the installed files themselves carry.
-- **Amends §5.4 F41-5.** A full uninstall that removes every version also removes a **pristine** `update-state.json`. It needs no extra confirmation, but every other F41-5 condition still holds: exact path, regular file, under the lock, single unlink, and kept if any removal failed.
-- A **non-pristine** state keeps the typed F41-5 confirmation unchanged.
-- The 4b test that expects the root to disappear after install → full uninstall stays as it is, and it now passes through this rule. New cases:
-  - a pristine state is removed silently;
-  - a non-pristine state is kept unless the typed confirmation is given;
-  - a pristine state is kept when a version removal failed.
+**P4d-2: §14.4 install seeding vs the 4b install → uninstall tests (revised after Lam #56: option 1, no contract relaxation).**
+- **F41-5, §5.4 step 5 and §12.3 M3 stay exactly as written, for every valid state.** That includes a state with `accepted: null` and no rotations. Its `floor` is a persistent high-water mark: deleting it silently would let a later install of an older signed release lower the floor (A10 → uninstall → A5). Removing the state still needs the typed `RESET UPDATE STATE` on a TTY. With no TTY, with `--yes`, or with a declined answer, the state is kept. A root that holds only `update-state.json` is an authorized final result.
+- **The 4b test is migrated explicitly to the new contract.** The contract is not weakened to fit the test.
+  - install → full uninstall with no TTY or with `--yes`: the root keeps exactly `update-state.json`, and nothing else remains;
+  - the same flow with the typed confirmation on a TTY: the root disappears.
+- **New required cases:**
+  - A10 → non-TTY full uninstall → reinstall of a K0-signed A5: install finds a non-fresh root (it holds `update-state.json`). It raises the floor only (`max(10, 5) = 10`), and the floor never falls to 5;
+  - A10 → typed full uninstall → reinstall of A5: a fresh root, floor 5. This is the owner-authorized reset;
+  - `uninstall --version` never changes the floor;
+  - a state that is malformed, or fails its sha256 line, is never deleted by uninstall, even if it looks pristine. Uninstall reports it and keeps it;
+  - any failed removal of a version or a shared path keeps the state.
+- **§14.4's fresh-root test is unaffected.** A root that holds only the state is not fresh, so install keeps the existing state, raising its floor when a newer release is installed.
 - **Legacy fixtures.** There are none. Every test fixture release is rebuilt by the 4d build with an `index_sequence` (fixtures use `1`, or the case's value), and install refuses a `MANIFEST.json` without one: `release has no index_sequence`. The foundation manifest keeps omitting it, because foundation is not a release. Production has no unsequenced release, since nothing was ever published.
 
 **P4d-3: `committed()` and `verifyVersion()` are install-shaped.**
