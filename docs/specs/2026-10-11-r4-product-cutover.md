@@ -971,8 +971,21 @@ This section changes **only** the console-window-close receipt that §13.9 M5-8 
   - `releases`: a non-empty array of `{version, release_sha256}`, sorted by version and without duplicates. Here `release_sha256` is the SHA-256 of that version's exact `release.json` bytes;
   - `rotations`: an array, possibly empty, of rotation statements (§14.3).
 - **The signature** is detached Ed25519 over the exact bytes: one base64 line, verified with `crypto.verify(null, …)` as in §5.1. Any unknown field, a missing field, or a non-canonical byte fails closed.
-- **Binding.** A release is installable by `update` only if it is listed in a verified index, and only if its downloaded `release.json` hashes to the listed `release_sha256`. Then the normal `release.json` signature check, size and SHA-256 checks, and offline `MANIFEST.json` check run, unchanged from `install`.
-- **Freshness.** If `expires` is not later than the local clock, `update` fails closed with `update index expired (<expires>); nothing changed`. Clock skew is not adjusted. How often a fresh index is re-signed when no release ships is a Q9 decision, and 4d does not implement it.
+- **Binding.** A release is installable by `update` only if it is listed in a verified or known index (§14.4), and only if its downloaded `release.json` hashes to the listed `release_sha256`.
+- **Which key checks `release.json.sig` (Lam P1-2 on #55).**
+  - On the update path, the signature is verified against the **trusted chain**: the embedded key, then each key reached through the persisted and newly accepted rotation statements. A signature is valid if any one key in that chain verifies it.
+  - Older chain keys are allowed here only because the bytes are already pinned by the digest in an index that the **newest** key verified, or by the known-index digest. An old key never authorizes a release by itself.
+  - The same rule covers all three cases: (a) a new index under the newest key; (b) the known rotation-bearing index after a crash, whose releases were signed by the previous key; (c) an older `--version` release listed in a newer index.
+  - The keys come only from the embedded key and verified rotation statements, never from a downloaded file.
+  - The verifier is refactored to take an explicit key list. `install` passes exactly `[TRUST_ANCHOR]`, so its behavior is unchanged. `update` passes the chain.
+  - Then size, SHA-256 and the offline `MANIFEST.json` check run, unchanged.
+- **Required cases:**
+  - K0 → K1, then a K1-signed index listing a K1-signed R2;
+  - a crash after the state write, then a re-run on the known K0-signed index I1 with a K0-signed R1;
+  - `--version` of an older K0-signed release listed in a K1 index;
+  - an older binary walking the persisted chain from its own embedded key after `--rollback`;
+  - a release signed by a key outside the chain refused, even when it is listed in a valid index.
+- **Freshness.** If `expires` is not later than the local clock, `update` fails closed with `update index expired (<expires>); nothing changed`. Clock skew is not adjusted, and neither `--from` nor `--version` bypasses expiry. How often a fresh index is re-signed when no release ships is a Q9 decision, and 4d does not implement it. **It is a Q9 precondition (Lam P2 on #55):** before any real trust anchor or publish, Q9 must settle a concrete index-renewal policy that works with immutable release assets, or a user-visible expiry horizon with a refresh requirement. Otherwise users are stranded between releases.
 - **Choosing the target.** By default the target is `latest`. `--version <v>` selects a listed release, and it never bypasses any check.
 
 ### 14.3 Keys and rotation
@@ -991,14 +1004,27 @@ This section changes **only** the console-window-close receipt that §13.9 M5-8 
 - **Bytes.** Line 1 is the canonical JSON `{"schema":"trajecta.update-state/v1","sequence":<n>,"index_sha256":<hex of the exact accepted index.json bytes>,"rotations":[…accepted statements…]}`. Line 2 is `sha256:<hex of line 1's bytes>`. Each line ends in `\n`. Anything else is corrupt.
 - **Writes.**
   - The file is written only under the install lock, by temp file + fsync + atomic rename. Each boundary has a checkpoint for the crash tests.
-  - It is written only after the new index has fully verified, and before any `current` switch.
+  - On `update`, it is written immediately after the new index has fully verified, before staging, and therefore before any `current` switch. A staged version therefore always implies a written state.
   - The new sequence must be `>=` the stored one. A lower one is refused as a replay, and nothing is written.
-  - **The already-accepted index.** An index whose SHA-256 equals the stored `index_sha256` is the index this machine already verified and recorded. It is accepted as known: its signature is not checked again, its rotations are not applied again, and the state is not rewritten. This is how a re-run after a crash converges. It is also how `update` and `update --check` keep working when the newest published index is still the one, signed by the old key, that introduced a rotation the state has already persisted (§14.3).
+  - **The already-accepted index.** An index whose SHA-256 equals the stored `index_sha256` is the index this machine already verified and recorded. It is accepted as known: its signature is not checked again, its rotations are not applied again, and the state is not rewritten. It is **not** exempt from freshness: an expired known index fails closed, exactly like a fresh one. This is how a re-run after a crash converges. It is also how `update` and `update --check` keep working when the newest published index is still the one, signed by the old key, that introduced a rotation the state has already persisted (§14.3).
   - Any **other** index with the stored sequence is refused as a conflicting index, with nothing written.
+- **Install creates the state (Lam P1-1 on #55).** There is no "first update" special case. `install` writes the initial state when none exists:
+  - Line 1 is `{"schema":"trajecta.update-state/v1","sequence":<the installed release's MANIFEST index_sequence>,"index_sha256":null,"rotations":[]}`. The sequence comes from a release that `install` has already verified (signed `release.json` → SHA-256 → `MANIFEST.json`), so it is trusted.
+  - `install` writes it with the same temp + fsync + rename, under the install lock, **before** the `current` pointer write. A crash before that write leaves no `current`, and re-running install converges.
+  - If a state already exists and is valid, `install` raises its sequence to the installed release's `index_sequence` when that is higher. It never lowers it, and leaves `index_sha256` and `rotations` unchanged. If a state exists and is corrupt, `install` refuses with the `--reset-state` recovery and writes nothing.
+  - `index_sha256: null` is valid only in a state that no index has touched yet. The first verified index replaces it.
+  - No released 0.x root exists without a state: no release has ever been published, and the 4b/4c roots are test-only. So 4d needs no migration of older roots.
 - **Missing or corrupt state.**
-  - **The very first update** happens when no state exists, and the only installed versions are ones `install` placed. The state is then created from the first verified index whose sequence is at least the highest `index_sequence` in the installed versions' `MANIFEST.json` (§14.5). This is the one non-reset creation, and it is a fresh-install case, not a silent re-creation.
-  - In every other missing or corrupt case, `update` refuses and prints `trajecta update --reset-state`, exactly as §12.2 says. The typed confirmation text is `RESET UPDATE STATE`, the same as uninstall, and the honest-limit sentence of §12.2 is printed before the prompt.
-  - **How to tell "first update" from "state lost".** Any `owned.json` ledger entry of kind `update` means an update has happened before, so a missing state is lost state.
+  - With a valid `current`, a missing state can only mean the state was lost. A state that does not parse, or fails its sha256 line, is corrupt. In both cases `update` and `update --check` refuse and print `trajecta update --reset-state`, as §12.2 says.
+  - The typed confirmation text is `RESET UPDATE STATE`, the same as uninstall. The honest-limit sentence of §12.2 is printed before the prompt.
+  - There is no silent re-creation, and no ledger kind is added for this. `owned.json` keeps its existing entry kinds, and `update-state.json` stays outside `owned.json`, exactly as §5.4 F41-5 and the merged uninstall code expect.
+- **Required cases (M2/M3):**
+  - crash before and after install's state write;
+  - crash before and after each update state write;
+  - compatibility refused after the state write: the state stays, and a re-run converges;
+  - `uninstall --version` of a staged or of an old version: the state is untouched;
+  - a missing or corrupt state after a successful update: refusal, then a typed reset;
+  - a full uninstall removes the state only under the F41-5 exception.
 
 ### 14.5 Artifact additions
 
@@ -1020,11 +1046,17 @@ This section changes **only** the console-window-close receipt that §13.9 M5-8 
   - **Compatible:** every identity store's version is in the target's `readable_schema_versions`, and every work store's schema equals the target's `stores.work.schema`.
   - **Needs migration:** an identity store is older than the target's `writable_schema_version` and outside its readable set (§12.2 step 6).
   - **Incompatible:** anything else, including a store newer than the target can read (§12.2 step 5).
-- **Stated honestly.** Stores the product cannot see (another `--db` never passed to `install` or `update`) are not checked. The engines' existing refusal of an unreadable schema still protects them at run time, and `--rollback` is the way back. The README says so.
+- **Stated honestly (Lam P2 on #55).** Only the enumerated set is inspected. These are **not** inspected:
+  - stores named by earlier or retired plugin generations (a client may keep running an old plugin through the wrapper, per §13.6);
+  - `--db` or `--work-root` overrides typed on the command line at run time;
+  - stores named in hand-written external MCP configs;
+  - stores selected through engine environment overrides that `update` cannot see.
+
+  For those stores the product claims neither compatibility nor rollback safety. The engines' existing refusal of an unreadable schema still applies at run time. The README lists the same exclusions, and tells users to pass such stores with `update --db` or `--work-root` so they are checked.
 
 ### 14.7 Staging, switching and the ledger
 
-- **Staging reuses the installer.** Phase A and the Phase B rename run with a new internal flag that never writes `current`. The staged directory is `<root>/<target>/` with its own `node` file. Its ledger entries are written as kind `update` (stage) and stay **inactive**.
+- **Staging reuses the installer.** Phase A and the Phase B rename run with a new internal flag that never writes `current`. The staged directory is `<root>/<target>/` with its own `node` file. Its ledger entries are ordinary `file` and `directory` receipts, exactly as `install` writes them. No new ledger kind is added. The version stays **inactive** because `current` does not name it.
 - **Switch.** On compatible: write `update-state.json`, then the atomic two-line `current` (`<target>\n<previous>\n`), then Phase C and doctor, exactly as install.
 - **Plugins and wrappers are not rebuilt by default.** The `bin/` wrappers, the user-bin stub and every plugin read `current` at run time, so they follow the switch (§12.3 M5). Per §13.6, if the target's plugin builder would produce different bytes from a recipe, `update` rebuilds verbatim from the recipe as a new generation. Otherwise it skips entirely. 4d asserts the skip case on the 4d fixtures and tests the rebuild path with a fixture whose builder bytes differ.
 - **An inactive staged version** (refused compatibility, or waiting for `migrate-to`) is removed by the next `update` that targets a different version, or by `uninstall --version <v>`. Both paths go through the existing owned-path rules.
