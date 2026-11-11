@@ -983,16 +983,18 @@ This section changes **only** the console-window-close receipt that §13.9 M5-8 
   1. The client first verifies the whole index with its **current** newest key. A rotation is accepted only from an index signed by the currently trusted key (§12.2 "shipped inside a release the current key signed").
   2. It then walks `rotations` in order. It accepts a statement only if `from` equals the current newest key and the statement's signature verifies.
   3. Accepted statements are appended to the state, and later statements continue from the new key.
-- An index that the current key cannot verify fails closed, even if it names a valid chain. A chain persisted in the state that does not verify from the embedded key also fails closed.
+- An index that the current key cannot verify fails closed, even if it names a valid chain. The one exception is the already-accepted index, matched by its digest (§14.4). No older key in the chain is ever used to verify a **new** index. A chain persisted in the state that does not verify from the embedded key also fails closed.
 
 ### 14.4 `update-state.json`
 
 - **Path.** Exactly `<root>/update-state.json`: a regular file, never a symlink. Uninstall already treats it this way (4b, §5.4 F41-5).
-- **Bytes.** Line 1 is the canonical JSON `{"schema":"trajecta.update-state/v1","sequence":<n>,"rotations":[…accepted statements…]}`. Line 2 is `sha256:<hex of line 1's bytes>`. Each line ends in `\n`. Anything else is corrupt.
+- **Bytes.** Line 1 is the canonical JSON `{"schema":"trajecta.update-state/v1","sequence":<n>,"index_sha256":<hex of the exact accepted index.json bytes>,"rotations":[…accepted statements…]}`. Line 2 is `sha256:<hex of line 1's bytes>`. Each line ends in `\n`. Anything else is corrupt.
 - **Writes.**
   - The file is written only under the install lock, by temp file + fsync + atomic rename. Each boundary has a checkpoint for the crash tests.
   - It is written only after the new index has fully verified, and before any `current` switch.
-  - The new sequence must be `>=` the stored one. A lower one is refused as a replay, and nothing is written. An equal one is accepted for the same bytes only, which allows a re-run after a crash.
+  - The new sequence must be `>=` the stored one. A lower one is refused as a replay, and nothing is written.
+  - **The already-accepted index.** An index whose SHA-256 equals the stored `index_sha256` is the index this machine already verified and recorded. It is accepted as known: its signature is not checked again, its rotations are not applied again, and the state is not rewritten. This is how a re-run after a crash converges. It is also how `update` and `update --check` keep working when the newest published index is still the one, signed by the old key, that introduced a rotation the state has already persisted (§14.3).
+  - Any **other** index with the stored sequence is refused as a conflicting index, with nothing written.
 - **Missing or corrupt state.**
   - **The very first update** happens when no state exists, and the only installed versions are ones `install` placed. The state is then created from the first verified index whose sequence is at least the highest `index_sequence` in the installed versions' `MANIFEST.json` (§14.5). This is the one non-reset creation, and it is a fresh-install case, not a silent re-creation.
   - In every other missing or corrupt case, `update` refuses and prints `trajecta update --reset-state`, exactly as §12.2 says. The typed confirmation text is `RESET UPDATE STATE`, the same as uninstall, and the honest-limit sentence of §12.2 is printed before the prompt.
@@ -1008,7 +1010,9 @@ This section changes **only** the console-window-close receipt that §13.9 M5-8 
 
 - **The set** is the union of:
   1. explicit `--db <path>` and `--work-root <dir>` given to `update`;
-  2. the `db` (or, when `db` is null, the profile resolved under the recipe's `defaults`) and the `TRAJECTA_WORK_ROOT` default of **every committed current plugin generation**;
+  2. for **every committed current plugin generation**, both servers' resolved stores:
+     - identity: the `db`, or, when `db` is null, the profile resolved under the recipe's `defaults` (`TRAJECTA_IDENTITY_DATA_DIR`, `TRAJECTA_IDENTITY_PROFILES`, `TRAJECTA_WORK_ROOT`);
+     - work: the root resolved from the work server's `TRAJECTA_HOME` default (§13.2: the work server's `--work-root` is rendered as `TRAJECTA_HOME`), or the engine default when absent;
   3. the engines' default identity profile store and default work root.
 - **A store that does not exist is compatible**, because there is nothing to read.
 - **Reading is read-only and engine-native.** The product calls the **installed** version's engines through their existing read-only surfaces to learn the identity schema version and the work schema. It never opens a store itself. If either engine has no exported read-only probe that leaves store bytes and sidecars unchanged, Codex STOPs and reports the available surface. Aux then settles it, and no probe is invented in the product.
