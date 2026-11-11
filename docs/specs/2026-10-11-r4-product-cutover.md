@@ -922,3 +922,29 @@ Proven natively on Node 22 and 24, and **not** reopened by this section:
   - a non-interactive `trajecta-mcp.cmd` check with piped stdio: the MCP `initialize` round-trip, then stdin closed, then the exit status, stdout/stderr bytes and engine-PID liveness, compared with the same sequence run directly. "MCP is unaffected" may be stated only if this check shows parity.
 - The Y/N prompt and the exit-code difference appear in the 4c acceptance summary and the user-facing limitations, never as an ordinary green parity test. M8 re-checks the declared text on Ty's rehearsal machine if it runs Windows.
 - No wrapper change is made to hide the prompt. Any future change needs its own settlement.
+
+### 13.10 M5-8 physical console close: deferred to M8 (Lam P1 on trajecta#3 @ 508ffc7; Aux settlement 2026-11-11; owner acceptance required)
+
+This section changes **only** the console-window-close receipt that §13.9 M5-8 required. Every other part of §13.9 stands unchanged.
+
+- **Observation, both runtimes, on GitHub-hosted Windows.**
+  - A posted `WM_CLOSE` removes the console window within about 27 ms.
+  - No `CTRL_CLOSE_EVENT` reaches a control probe.
+  - `cmd.exe` and `conhost` stay alive, and a plain non-Node control process in the same console behaves the same way.
+  - Direct and wrapped runs show the same state before the harness's forced cleanup.
+- **Reading.** The hosted environment cannot produce a real console-close event. These runs therefore say nothing about what Trajecta does when a person closes the window. They are not a natural-cleanup proof and not a parity proof.
+- **Settlement.**
+  1. The physical-close receipt is **deferred to M8**. In 4c it is recorded as **M5-8 physical close: NOT VERIFIED; deferred to M8**.
+  2. M5-8 is **final for 4c** on the receipts that do exist on both runtimes:
+     - the `Y` and `N` answers, with exit statuses, output and engine-process state;
+     - the non-interactive `trajecta-mcp.cmd` piped-stdio parity check.
+  3. The hosted `WM_CLOSE` observation stays as an observation-only test. Its only allowed disposition is "not reproducible on hosted runner". It never asserts natural cleanup, and never asserts direct/wrapped parity for a real close.
+- **M8 requirement**, on a real Windows desktop, for each of Node 22 and Node 24, run directly and through `trajecta.cmd`:
+  - close the console window with the title-bar X while `identity view` is running;
+  - record that `CTRL_CLOSE_EVENT` was delivered;
+  - record the output up to the close;
+  - record whether the engine process (and `cmd.exe` for the wrapped run) is gone within 10 s.
+
+  If wrapped and direct differ, or if the engine outlives the window, that is an M8 finding. It needs its own settlement before release.
+- **Release reporting.** The 4c acceptance summary and `docs/R4C-WINDOWS-LIMITATIONS.md` list M5-8 physical close as **NOT VERIFIED in 4c; deferred to M8**, next to M5-3. Q9 (release) cannot pass while either item is unresolved, or while it lacks an explicit owner decision.
+- **Owner acceptance.** This deferral takes effect only when Ty approves it directly on this PR. Aux's report of her decision is not enough.
