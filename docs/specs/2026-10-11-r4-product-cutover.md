@@ -948,3 +948,114 @@ This section changes **only** the console-window-close receipt that §13.9 M5-8 
   If wrapped and direct differ, or if the engine outlives the window, that is an M8 finding. It needs its own settlement before release.
 - **Release reporting.** The 4c acceptance summary and `docs/R4C-WINDOWS-LIMITATIONS.md` list M5-8 physical close as **NOT VERIFIED in 4c; deferred to M8**, next to M5-3. Q9 (release) cannot pass while either item is unresolved, or while it lacks an explicit owner decision.
 - **Owner acceptance.** This deferral takes effect only when Ty approves it directly on this PR. Aux's report of her decision is not enough.
+
+## 14. PR 4d preflight: `trajecta update` (Aux, 2026-11-11)
+
+§12.2 is the architecture, and it stays binding. This section settles what §12.2 left open, so Codex can build 4d from the merged 4b/4c code (product `main` @ e9f9d81) without inventing law. Nothing here authorizes a release, signing, a key, a tag or a publish. Those are Q9 and need Ty's explicit consent. `TRUST_ANCHOR` stays empty: without a configured key, `update` refuses exactly as `install` does today (`trajecta: no trusted release key configured`). Every test uses the existing test-only `--import` seam for keys.
+
+### 14.1 Where updates come from
+
+- **One pinned source, in code.** `product/src/update-source.ts` exports the base URL `https://github.com/tamvi-journal/trajecta/releases`. A reviewed PR is the only way to change it, and the test seam may replace it, the same way it replaces `trust.ts`.
+- **The index** is fetched from `<base>/latest/download/index.json` and `index.json.sig`. Every published release carries the newest index as two assets, so "latest" always serves it. Nothing is a mutable asset.
+- **A release's files** are fetched from `<base>/download/v<version>/`: `release.json`, `release.json.sig`, `trajecta-<version>.tar.gz` and `trajecta-extract.mjs`. These are the same four files `install --release` already verifies.
+- **Transport.** Node's built-in `fetch`, `https:` only, at every hop. Redirects may go only to `github.com`, `objects.githubusercontent.com` and `release-assets.githubusercontent.com`. Hard size caps: 1 MiB for the index, 64 KiB for `release.json`, and for the tarball the size its signed `release.json` states, which must also be at most 256 MiB. There is a 60 s per-file timeout. Every byte is written into a fresh staging directory under `<root>` and is verified before use. Transport is never trusted; only signatures and digests are.
+- **Offline or proxied machines.** `update --from <dir>` reads the same layout from a local directory: `<dir>/index.json`, `<dir>/index.json.sig` and `<dir>/v<version>/…`. It is verified exactly as the network path, with no shortcut. The README says that Node's `fetch` does not use `HTTPS_PROXY` unless Node's own proxy option is enabled, and that `--from` is the supported route around that.
+
+### 14.2 The signed index (`trajecta.index/v1`)
+
+- **Fields.** The bytes are canonical JSON with exactly these fields:
+  - `schema`: `"trajecta.index/v1"`;
+  - `sequence`: a positive safe integer;
+  - `expires`: a UTC `YYYY-MM-DDTHH:MM:SSZ`;
+  - `latest`: a version;
+  - `releases`: a non-empty array of `{version, release_sha256}`, sorted by version and without duplicates. Here `release_sha256` is the SHA-256 of that version's exact `release.json` bytes;
+  - `rotations`: an array, possibly empty, of rotation statements (§14.3).
+- **The signature** is detached Ed25519 over the exact bytes: one base64 line, verified with `crypto.verify(null, …)` as in §5.1. Any unknown field, a missing field, or a non-canonical byte fails closed.
+- **Binding.** A release is installable by `update` only if it is listed in a verified index, and only if its downloaded `release.json` hashes to the listed `release_sha256`. Then the normal `release.json` signature check, size and SHA-256 checks, and offline `MANIFEST.json` check run, unchanged from `install`.
+- **Freshness.** If `expires` is not later than the local clock, `update` fails closed with `update index expired (<expires>); nothing changed`. Clock skew is not adjusted. How often a fresh index is re-signed when no release ships is a Q9 decision, and 4d does not implement it.
+- **Choosing the target.** By default the target is `latest`. `--version <v>` selects a listed release, and it never bypasses any check.
+
+### 14.3 Keys and rotation
+
+- **The trusted key** is `TRUST_ANCHOR`, followed by the persisted rotation chain in `update-state.json` (§14.4), up to the newest key reached.
+- **A rotation statement** is `{schema: "trajecta.rotation/v1", from: <SPKI base64>, to: <SPKI base64>, sequence: <the index sequence that introduces it>, signature: <Ed25519 by from over the canonical JSON of the other four fields>}`.
+- **Acceptance.**
+  1. The client first verifies the whole index with its **current** newest key. A rotation is accepted only from an index signed by the currently trusted key (§12.2 "shipped inside a release the current key signed").
+  2. It then walks `rotations` in order. It accepts a statement only if `from` equals the current newest key and the statement's signature verifies.
+  3. Accepted statements are appended to the state, and later statements continue from the new key.
+- An index that the current key cannot verify fails closed, even if it names a valid chain. A chain persisted in the state that does not verify from the embedded key also fails closed.
+
+### 14.4 `update-state.json`
+
+- **Path.** Exactly `<root>/update-state.json`: a regular file, never a symlink. Uninstall already treats it this way (4b, §5.4 F41-5).
+- **Bytes.** Line 1 is the canonical JSON `{"schema":"trajecta.update-state/v1","sequence":<n>,"rotations":[…accepted statements…]}`. Line 2 is `sha256:<hex of line 1's bytes>`. Each line ends in `\n`. Anything else is corrupt.
+- **Writes.**
+  - The file is written only under the install lock, by temp file + fsync + atomic rename. Each boundary has a checkpoint for the crash tests.
+  - It is written only after the new index has fully verified, and before any `current` switch.
+  - The new sequence must be `>=` the stored one. A lower one is refused as a replay, and nothing is written. An equal one is accepted for the same bytes only, which allows a re-run after a crash.
+- **Missing or corrupt state.**
+  - **The very first update** happens when no state exists, and the only installed versions are ones `install` placed. The state is then created from the first verified index whose sequence is at least the highest `index_sequence` in the installed versions' `MANIFEST.json` (§14.5). This is the one non-reset creation, and it is a fresh-install case, not a silent re-creation.
+  - In every other missing or corrupt case, `update` refuses and prints `trajecta update --reset-state`, exactly as §12.2 says. The typed confirmation text is `RESET UPDATE STATE`, the same as uninstall, and the honest-limit sentence of §12.2 is printed before the prompt.
+  - **How to tell "first update" from "state lost".** Any `owned.json` ledger entry of kind `update` means an update has happened before, so a missing state is lost state.
+
+### 14.5 Artifact additions
+
+- **`MANIFEST.json` gains `index_sequence`.** It is a positive safe integer, supplied to the build as an input and fixed when the candidate is made (§12.1, item 1). It is part of the candidate and of the six-way byte comparison. The 4d test fixtures use sequence `1`.
+- **`CHANGELOG.md`** ships in the tarball and is listed in `MANIFEST.json`. Its format: each version opens with `## <version>`, newest first, followed by plain-language lines. `update` prints, from the **target's** verified changelog, the sections for every version newer than the installed one, up to and including the target. It prints them before switching. If the target's changelog lacks the target's own heading, `update` refuses.
+- **No other artifact field changes.** `compat.json` already holds what update needs: `node`, `operating_systems`, `stores.identity.readable_schema_versions` and `writable_schema_version`, and `stores.work.schema`.
+
+### 14.6 Which stores `update` inspects (§12.2 step 3)
+
+- **The set** is the union of:
+  1. explicit `--db <path>` and `--work-root <dir>` given to `update`;
+  2. the `db` (or, when `db` is null, the profile resolved under the recipe's `defaults`) and the `TRAJECTA_WORK_ROOT` default of **every committed current plugin generation**;
+  3. the engines' default identity profile store and default work root.
+- **A store that does not exist is compatible**, because there is nothing to read.
+- **Reading is read-only and engine-native.** The product calls the **installed** version's engines through their existing read-only surfaces to learn the identity schema version and the work schema. It never opens a store itself. If either engine has no exported read-only probe that leaves store bytes and sidecars unchanged, Codex STOPs and reports the available surface. Aux then settles it, and no probe is invented in the product.
+- **Comparison.**
+  - **Compatible:** every identity store's version is in the target's `readable_schema_versions`, and every work store's schema equals the target's `stores.work.schema`.
+  - **Needs migration:** an identity store is older than the target's `writable_schema_version` and outside its readable set (§12.2 step 6).
+  - **Incompatible:** anything else, including a store newer than the target can read (§12.2 step 5).
+- **Stated honestly.** Stores the product cannot see (another `--db` never passed to `install` or `update`) are not checked. The engines' existing refusal of an unreadable schema still protects them at run time, and `--rollback` is the way back. The README says so.
+
+### 14.7 Staging, switching and the ledger
+
+- **Staging reuses the installer.** Phase A and the Phase B rename run with a new internal flag that never writes `current`. The staged directory is `<root>/<target>/` with its own `node` file. Its ledger entries are written as kind `update` (stage) and stay **inactive**.
+- **Switch.** On compatible: write `update-state.json`, then the atomic two-line `current` (`<target>\n<previous>\n`), then Phase C and doctor, exactly as install.
+- **Plugins and wrappers are not rebuilt by default.** The `bin/` wrappers, the user-bin stub and every plugin read `current` at run time, so they follow the switch (§12.3 M5). Per §13.6, if the target's plugin builder would produce different bytes from a recipe, `update` rebuilds verbatim from the recipe as a new generation. Otherwise it skips entirely. 4d asserts the skip case on the 4d fixtures and tests the rebuild path with a fixture whose builder bytes differ.
+- **An inactive staged version** (refused compatibility, or waiting for `migrate-to`) is removed by the next `update` that targets a different version, or by `uninstall --version <v>`. Both paths go through the existing owned-path rules.
+- **Direction.** The ordering is SemVer 2.0 precedence. A target lower than the active version is refused (`downgrade refused; use --rollback`). A target equal to it writes nothing and exits 0 with `already at <v>`.
+
+### 14.8 `update --check`, and what is not in 4d
+
+- **`update --check`** verifies the index (signature, freshness, key chain) and prints the active version, `latest`, and whether an update exists. It writes **nothing**, not even `update-state.json`, and exits 0. An unverifiable or expired index exits 1, with the reason.
+- **Not in 4d**, each deferred by name:
+  - the cached `doctor` notice and `doctor --check-updates` (§12.2). `doctor` stays exactly as is;
+  - re-signing a fresh index without a release (Q9);
+  - the release workflow and its dry-run gate (§12.3 F41-4; Q9/cutover);
+  - TUF-style roles (§12.2, already deferred).
+
+### 14.9 PR split and gates
+
+**4d-1: trust and check.**
+- `update-source.ts` and fetch with `--from`.
+- The index, rotation and state formats, with their verification.
+- `update --check`, and `--reset-state`.
+- `MANIFEST.json` `index_sequence`, and `CHANGELOG.md`.
+- The §12.3 M2 metadata, rotation, replay, expiry and state cases.
+- Fetch tests against a local 127.0.0.1 HTTPS fixture through the test seam: redirects to a disallowed host, `http:`, oversize, timeout, and a truncated body. Each must fail closed with no state write.
+
+**4d-2: stage and switch.**
+- §14.6 inspection, §14.7 staging and switch, the changelog print, direction rules, `migrate-to --using` (§12.2), and the `--rollback` refusal after a migration.
+- All §12.3 M3, M5 and M7 cases:
+  - crashes at every Phase A/B/C and state-write boundary, with convergence;
+  - `current` never naming an incompatible version;
+  - wrappers and plugins working across an update with no rebuild;
+  - the Python oracle reading TS-written stores after an update.
+
+**Both PRs.**
+- Both run the full existing M2–M5 suites, unchanged, on {macOS, Linux, Windows} × {Node 22, 24}, plus the six-way byte-identical comparator.
+- Lam reviews each at its exact head.
+- No real store, real MCP config, installed plugin, network endpoint other than the 127.0.0.1 fixture, key, or release is touched.
+
+**Codex STOP rule (unchanged).** If any line here conflicts with merged 4b/4c code or with §12, STOP with evidence. Do not reinterpret.
