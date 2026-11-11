@@ -1075,7 +1075,7 @@ This section changes **only** the console-window-close receipt that §13.9 M5-8 
   - `--rollback` and `uninstall --version` preserve the floor, `accepted` and the rotations;
   - full uninstall removes the state only under F41-5.
 - **Reset:**
-  - `--reset-state` sets the floor from the installed MANIFESTs exactly and rebuilds the rotations from the embedded key.
+  - `--reset-state` takes `manifest_floor` exactly from the installed MANIFESTs, persists `floor = max(manifest_floor, accepted.sequence)`, and rebuilds the rotations from the embedded key.
   - Against a still-current K0-signed I1 that introduces K1, the reset recovers, K1 is newest, and a later K1-signed I2 is accepted.
   - Installed A has `index_sequence` 10, and the fetched I20 has sequence 20. The reset yields a **readable** state with floor 20 and `accepted` 20. `update --check` on I20 then succeeds with no write, and I19 is refused as a replay.
   - A reset at I10 with `manifest_floor` 10 yields floor 10 and `accepted` 10.
@@ -1156,3 +1156,42 @@ This section changes **only** the console-window-close receipt that §13.9 M5-8 
 - No real store, real MCP config, installed plugin, network endpoint other than the 127.0.0.1 fixture, key, or release is touched.
 
 **Codex STOP rule (unchanged).** If any line here conflicts with merged 4b/4c code or with §12, STOP with evidence. Do not reinterpret.
+
+### 14.10 PR 4d preflight settlements (Codex preflight against product `4d05f9d`, which equals `e9f9d81` for these files; Aux, 2026-11-11)
+
+Codex's read-only preflight raised one STOP on each of §14.6 (work), §14.4 and the cross-cutting install code. The answers below settle them. §14.1–§14.9 otherwise stand.
+
+**P4d-1: §14.6 work store has no public schema probe.**
+- **Observation.** Identity exports `MemoryStore.schemaInfo()`. It is read-only, reports `user_version`, and refuses WAL headers and sidecars before it opens anything. Work exports only `TrajectaStore.list()`. Its schema check, `readState()`, is private and folds unknown schemas into `OperationInDoubt`.
+- **Settlement.** Identity stores are inspected through `MemoryStore.schemaInfo()` from the **installed** version's vendored engine. Work stores are **not read** in 4d. Instead:
+  - If the installed version's verified `compat.json` `stores.work.schema` **equals** the target's, every work store is compatible. The installed engine writes only its own schema, so no read is needed.
+  - If the two **differ**, `update` refuses with `work schema change (<a> → <b>) is not supported by this update; nothing changed`. Supporting it needs a public read-only work probe, pinned through a new work-repo tag, and its own settlement.
+- No product code parses work state. The README states the rule.
+
+**P4d-2: §14.4 install seeding vs the 4b install → uninstall tests (revised after Lam #56: option 1, no contract relaxation).**
+- **F41-5, §5.4 step 5 and §12.3 M3 stay exactly as written, for every valid state.** That includes a state with `accepted: null` and no rotations. Its `floor` is a persistent high-water mark: deleting it silently would let a later install of an older signed release lower the floor (A10 → uninstall → A5). Removing the state still needs the typed `RESET UPDATE STATE` on a TTY. With no TTY, with `--yes`, or with a declined answer, the state is kept. A root that holds only `update-state.json` is an authorized final result.
+- **The 4b test is migrated explicitly to the new contract.** The contract is not weakened to fit the test.
+  - install → full uninstall with no TTY or with `--yes`: the root keeps exactly `update-state.json`, and nothing else remains;
+  - the same flow with the typed confirmation on a TTY: the root disappears.
+- **New required cases:**
+  - A10 → non-TTY full uninstall → reinstall of a K0-signed A5: install finds a non-fresh root (it holds `update-state.json`). It raises the floor only (`max(10, 5) = 10`), and the floor never falls to 5;
+  - A10 → typed full uninstall → reinstall of A5: a fresh root, floor 5. This is the owner-authorized reset;
+  - `uninstall --version` never changes the floor;
+  - a state that is malformed, or fails its sha256 line, is never deleted by uninstall, even if it looks pristine. Uninstall reports it and keeps it;
+  - any failed removal of a version or a shared path keeps the state.
+- **§14.4's fresh-root test is unaffected.** A root that holds only the state is not fresh, so install keeps the existing state, raising its floor when a newer release is installed.
+- **Legacy fixtures.** There are none. Every test fixture release is rebuilt by the 4d build with an `index_sequence` (fixtures use `1`, or the case's value), and install refuses a `MANIFEST.json` without one: `release has no index_sequence`. The foundation manifest keeps omitting it, because foundation is not a release. Production has no unsequenced release, since nothing was ever published.
+
+**P4d-3: `committed()` and `verifyVersion()` are install-shaped.**
+- **Split `committed()`** into `stage()` (Phase A/B: files, receipts, version `node` file) and `activate()`. `activate()` runs the `current` switch, the identity-store bootstrap of §2.4 and Phase C, in that order.
+  - `install` = stage + activate, with byte-identical results to today.
+  - `update` stages, inspects, and activates only when compatible.
+  - The identity-store bootstrap must never run for a staged-only version.
+- **`verifyVersion()` takes the trusted key list explicitly**, like `verifyMetadata()`.
+  - `install` and the recovery paths that run before any update-state is read pass `[TRUST_ANCHOR]`.
+  - Every later re-verification of an installed version (doctor, `--rollback`, `migrate-to`, `uninstall --version`, update re-runs) passes the chain read from a **valid** state.
+  - If the state is missing or corrupt, a version that verifies only under a rotated key is reported as `needs --reset-state`, never as tampered. Versions signed by the embedded key still verify.
+  - Required cases: K1-signed installed R2 with a valid state → verifies; the same with a lost state → `needs --reset-state`; K0-signed R1 → verifies either way.
+
+**Provenance.** Codex reviewed spec text cached from `22f863f`, which equals what merged as `c5ad16d`, against product `4d05f9d`, whose install, uninstall and release files equal `e9f9d81`. 4d-1 is implemented on the latest product `main` against this file at the merge of this section.
+
