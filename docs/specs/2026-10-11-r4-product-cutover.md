@@ -1195,3 +1195,51 @@ Codex's read-only preflight raised one STOP on each of §14.6 (work), §14.4 and
 
 **Provenance.** Codex reviewed spec text cached from `22f863f`, which equals what merged as `c5ad16d`, against product `4d05f9d`, whose install, uninstall and release files equal `e9f9d81`. 4d-1 is implemented on the latest product `main` against this file at the merge of this section.
 
+
+### 14.11 Owner state reset across a crashing full uninstall (Codex 4d-1 STOP after #56; Aux, 2026-11-15)
+
+**What Codex reproduced** (isolated fixture, macOS, Node 22.23.1). The owner typed `RESET UPDATE STATE` through a real PTY, and the run was killed at `U:current`. The root then held only `.lock` and `.uninstall/`: no `update-state.json`, no `current`.
+- Product `main` recovers that root, as §5.4 requires.
+- §14.4 refuses it, because the root is stateless and not fresh.
+
+A second consequence follows from the same order. If the version being removed was signed by a rotated key (K1), unlinking the state at §5.4 step 5 deletes the K0→K1 chain **before** terminal cleanup A has to authenticate the recovery copy. If the printed resume command is also lost, the bootstrap fallback is left with only K0.
+
+**Settlement: the owner's decision is made at step 5, recorded durably, and carried out last.** This amends §5.4 steps 5–6 and the §14.4 fresh-root test. Nothing else in §5.4 or F41-5 changes.
+
+1. **Step 5 records the decision; it does not unlink.**
+   - A typed `RESET UPDATE STATE` on a TTY creates `<root>/update-state.reset`, an inert, empty, regular file, written atomically under the lock.
+   - Declined, no TTY or `--yes`: nothing is created, and the state is kept, exactly as today.
+   - When a run resumes and finds the marker, it does **not** ask again: the decision already stands. Without the marker, a resume asks again, as today.
+   - The marker is created only at step 5, so only when no version remains. A marker found in any root whose `current` names a version is inconsistent: every command refuses and reports it, and changes nothing.
+2. **Step 6 finalizes in this order:**
+   1. the lock temps;
+   2. the lock claims;
+   3. `owned.json`;
+   4. `current`;
+   5. `.uninstall/`, through terminal cleanup A–E. Here A authenticates using the key chain read from the still-present, **valid** state;
+   6. **then, only if the marker exists:** unlink `update-state.json`, then unlink `update-state.reset`. Both are exact-path regular files, each removed with a single unlink under the lock;
+   7. release and unlink `.lock`, then `rmdir` the root if it is empty.
+
+   The state, and with it the rotation chain, therefore outlives everything that might still need to be authenticated.
+3. **The bootstrap fallback (`--resume-uninstall`) and a later fresh install** authenticate a leftover `.uninstall/` with the embedded key plus the chain from a **valid** state.
+   - If the state is missing or corrupt and the recovery copy verifies only under a rotated key, they refuse. They report `needs --reset-state` (§14.10 P4d-3), and they keep everything.
+   - A copy signed by the embedded key still verifies with no state at all.
+4. **Install's lock-held recovery runs before the §14.4 fresh-root test, in this order:**
+   1. clear the reserved `update-state.json.tmp` (§14.4);
+   2. run the existing authenticated cleanup of a leftover `.uninstall/` (point 3);
+   3. **finish a reset the owner already confirmed.** This applies when the root holds nothing but lock artifacts, `update-state.reset`, and possibly `update-state.json`. Install then unlinks the state if it is present, then unlinks the marker. The marker is the durable proof of the owner's typed confirmation; nothing else can create it.
+   4. run the fresh-root test.
+
+   A root that still holds anything else after these steps is not fresh, and §14.4 decides as written.
+5. **Lost state is still never silently recreated.**
+   - A root with neither the marker nor the state, but with any other product leftover (`owned.json`, `current`, a version directory, `.planned.json`, or a `.uninstall/` that cleanup could not remove), is lost-state. It refuses until `--reset-state`.
+   - The only roots that become fresh are an empty one, or one whose owner-confirmed reset is finished in point 4.
+
+**Required M3 cases.** Each runs on Node 22 and 24, on all three operating systems, with a K0 release and a K1 release:
+- a kill at every step-6 boundary after a typed confirmation: each resume, bootstrap fallback, or fresh install converges to an empty root, or to a fresh install, without asking again;
+- the same boundaries without a confirmation: the state is always kept;
+- a K1-signed version with the printed resume command lost: the bootstrap fallback authenticates through the state's chain before the state is unlinked;
+- Codex's exact schedule (typed reset, then a kill at `U:current`): a re-run converges, with the state present until step 6.6;
+- a marker together with a valid `current`: refused, nothing changed;
+- a marker that is a symlink or directory: refused, not followed, not deleted;
+- a lost state with a `.uninstall/` signed by K1: refused with `needs --reset-state`, everything kept.
