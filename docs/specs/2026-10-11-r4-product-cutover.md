@@ -1195,3 +1195,61 @@ Codex's read-only preflight raised one STOP on each of §14.6 (work), §14.4 and
 
 **Provenance.** Codex reviewed spec text cached from `22f863f`, which equals what merged as `c5ad16d`, against product `4d05f9d`, whose install, uninstall and release files equal `e9f9d81`. 4d-1 is implemented on the latest product `main` against this file at the merge of this section.
 
+
+### 14.11 Owner state reset across a crashing full uninstall (Codex 4d-1 STOP after #56; Aux, 2026-11-15)
+
+**What Codex reproduced** (isolated fixture, macOS, Node 22.23.1). The owner typed `RESET UPDATE STATE` through a real PTY, and the run was killed at `U:current`. The root then held only `.lock` and `.uninstall/`: no `update-state.json`, no `current`.
+- Product `main` recovers that root, as §5.4 requires.
+- §14.4 refuses it, because the root is stateless and not fresh.
+
+A second consequence follows from the same order. If the version being removed was signed by a rotated key (K1), unlinking the state at §5.4 step 5 deletes the K0→K1 chain **before** terminal cleanup A has to authenticate the recovery copy. If the printed resume command is also lost, the bootstrap fallback is left with only K0.
+
+**Settlement (revised after Lam #57 P1): no stored consent. The state is removed last, and only on a typed confirmation from the current run.** No file ever stands in for the owner's consent. This amends §5.4 steps 5–6 and the §14.4 recovery order. F41-5 is otherwise unchanged.
+
+1. **Step 5 asks, and remembers the answer only in memory.**
+   - The typed `RESET UPDATE STATE` on a TTY sets an in-memory flag for this run. Nothing is written to disk.
+   - Declined, no TTY or `--yes`: the flag stays false and the state is kept, exactly as today.
+   - A crash loses the flag. Every later run that reaches the decision asks again on a TTY, and with no TTY it keeps the state.
+2. **Step 6 finalizes in this order:**
+   1. lock temps;
+   2. lock claims;
+   3. `owned.json`;
+   4. `.uninstall/`, through terminal cleanup A–E. Here A authenticates with the key chain read from the still-present **valid** state;
+   5. **only if this run's flag is true:** unlink `update-state.json` (exact path, regular file, a single unlink under the lock);
+   6. `current` (the `uninstalling` sentinel);
+   7. release and unlink `.lock`; `rmdir` the root if it is empty.
+
+   So the state and its rotation chain outlive every authentication. The sentinel outlives the state decision, which keeps the transaction visible until the decision has been made.
+3. **The one window with nothing left to resume from.** After cleanup E, `.uninstall/` no longer exists, so no recovery product is left to run `uninstall --resume`. A crash after that point (between 6.4 and 6.6) leaves only a dead `.lock`, the sentinel, and possibly `update-state.json`. That shape is completed by the next **install** (§5.4 already lets a fresh install recover named leftovers), under the lock, in this order:
+   1. Recognize the shape exactly. The root holds only lock artifacts, a `current` whose bytes are exactly the sentinel, and optionally a valid `update-state.json` plus its reserved temp. It holds no `owned.json`, no `.uninstall/`, no version directory and no `.planned.json`. Any other shape keeps the existing rules: the sentinel refuses everything except resume and status.
+   2. **State present (valid):** ask again, live, on a TTY, with the same warning and the typed `RESET UPDATE STATE`. Confirmed: unlink the state. Declined, no TTY or `--yes`: keep the state. Either way, then unlink the sentinel and continue. Nothing is assumed from the earlier run.
+   3. **State absent (Lam #57 re-review P1).** This shape cannot be told apart from a lost state, and the sentinel proves nothing. It needs a **new live typed `RESET UPDATE STATE` on a TTY**, even if an earlier run may already have had the owner's consent.
+      - Confirmed: unlink the sentinel and continue. The root is fresh.
+      - No TTY, `--yes` or declined: **refuse**, change nothing, and print `a previous uninstall ended without update state; run trajecta install on a terminal and confirm RESET UPDATE STATE, or restore update-state.json`. The sentinel stays, and no state is created.
+   4. Continue with the §14.4 fresh-root test. A kept state makes the root non-fresh, so install keeps it and raises the floor. A reset or a confirmed absent state leaves the root fresh.
+   5. **Where this runs.** The shape test and the prompts run **under the install lock**, at the recovery step of point 5. The existing pre-lock refusal of a sentinel root stays for every other shape. The only exception is the exact shape above: `current` must be exactly the sentinel bytes, and any foreign file in the root makes it refuse, as today.
+4. **Before the bootstrap fallback (`--resume-uninstall`) and install** run the existing authenticated cleanup of a leftover `.uninstall/`, they read the key chain from a **valid** state.
+   - If the state is missing or corrupt and the recovery copy verifies only under a rotated key, they refuse with `needs --reset-state` (§14.10 P4d-3) and keep everything.
+   - An embedded-key copy still verifies with no state at all.
+5. **Install's lock-held recovery order** is: clear `update-state.json.tmp` (§14.4), then the authenticated `.uninstall/` cleanup (point 4), then the point-3 completion, then the §14.4 fresh-root test.
+6. **No stored consent anywhere.**
+   - No marker file exists in this design. A name such as `update-state.reset`, or any other unexpected file in the root, makes the root non-fresh: it is reported and never treated as consent.
+   - A state-only root left by a declined or non-TTY uninstall stays exactly that. Install keeps the state (§14.10 P4d-2), and only a live typed confirmation (point 3, or `--reset-state`) can reset it.
+
+**Required M3 cases.** Each runs on Node 22 and 24, on all three operating systems, with a K0 release and a K1 release:
+- **Kill at every step-6 boundary after a typed confirmation:**
+  - before 6.5: the resume, bootstrap fallback or install asks again on a TTY. A re-typed confirmation resets the state; no TTY keeps it;
+  - between 6.5 and 6.6: the next install unlinks the sentinel, and the root is fresh;
+  - in the 6.4–6.6 window with the state still present: install asks live (point 3.2);
+  - typed confirmation, then a crash between 6.5 and 6.6, so the state is gone and the sentinel remains: a non-TTY install **refuses** and changes nothing. A re-typed confirmation on a TTY proceeds to a fresh root.
+- **The same boundaries without a confirmation:** the state is always kept.
+- **K1-signed version with the printed resume command lost:** the bootstrap fallback authenticates through the state's chain before any state unlink.
+- **Codex's exact schedule** (typed reset, then a kill at `U:current`): the state is still present, and the run converges.
+- **Lam's forgery cases:**
+  - A10, then a no-TTY full uninstall, which leaves a state-only root. Inject a well-formed or empty `update-state.reset`, then install A5. The state is **not** deleted, the floor stays 10, and the injected file is reported.
+  - The same with the injected file placed while the sentinel is present: still no reset without a live typed confirmation.
+  - **Lam's lost-state case:** A10, then a non-TTY full uninstall killed between E and 6.6, then the state is deleted, then a non-TTY install of A5. Install **refuses**, the sentinel is untouched and no floor-5 state is created. With a live typed confirmation, it proceeds.
+  - Sentinel byte guard: a `current` that is not exactly `uninstalling\n`, or a foreign file in that shape, is refused.
+- **Shape checks:**
+  - a non-sentinel `current`, or any extra file, in the point-3 shape: refused as today;
+  - lost state with a K1-signed `.uninstall/`: `needs --reset-state`, and everything is kept.
