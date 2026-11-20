@@ -1244,7 +1244,7 @@ A second consequence follows from the same order. If the version being removed w
   - typed confirmation, then a crash between 6.5 and 6.6, so the state is gone and the sentinel remains: a non-TTY install **refuses** and changes nothing. A re-typed confirmation on a TTY proceeds to a fresh root.
 - **The same boundaries without a confirmation:** the state is always kept.
 - **K1-signed version with the printed resume command lost:** the bootstrap fallback authenticates through the state's chain before any state unlink.
-- **Codex's exact schedule** (typed reset, then a kill at `U:current`): the state is still present, and the run converges.
+- **Codex's schedule, corrected (Codex STOP on da7092e):** a typed reset, then a kill at `U:current`, which fires **after** the sentinel unlink. The state is already gone because this run confirmed, and the root holds only lock artifacts, so the next install finds a fresh root (the owner consented live in that run). The same kill without a confirmation leaves a state-only root, and the state is kept.
 - **Lam's forgery cases:**
   - A10, then a no-TTY full uninstall, which leaves a state-only root. Inject a well-formed or empty `update-state.reset`, then install A5. The state is **not** deleted, the floor stays 10, and the injected file is reported.
   - The same with the injected file placed while the sentinel is present: still no reset without a live typed confirmation.
@@ -1253,3 +1253,18 @@ A second consequence follows from the same order. If the version being removed w
 - **Shape checks:**
   - a non-sentinel `current`, or any extra file, in the point-3 shape: refused as today;
   - lost state with a K1-signed `.uninstall/`: `needs --reset-state`, and everything is kept.
+
+### 14.12 Step-6 checkpoint names (Codex 4d-1 STOP after #57; Aux, 2026-11-20)
+
+The §14.11 crash cases are pinned to these named checkpoints. Each sits immediately **after** the action named, in the §14.11 step-6 order:
+- `U:temps`: after the lock temps;
+- `U:claims`: after the lock claims;
+- `U:owned`: after `owned.json`;
+- `U:recovery-cleanup`: after `.uninstall/` terminal cleanup A–E. The state and its chain are still present here, in every run.
+- **`U:state-decided`** (new): fires before the state unlink, every run. The state is still present. A kill here leaves the post-E shape *with* the state (§14.11 point 3.2).
+- **`U:state-removed`** (new): fires after the state unlink, only in a run whose flag is true. The state is gone and the sentinel remains. A kill here leaves the post-E shape *without* the state, and §14.11 point 3.3 applies: a live typed confirmation is required, or the install refuses.
+- `U:current`: after the sentinel unlink. With the flag set, only lock artifacts remain. Without it, a state-only root remains.
+- `U:lock-released` and `U:root`: unchanged.
+
+`U:update-state`, the existing checkpoint after the step-5 prompt, keeps its name. It now marks only that the decision was taken in memory; no file changes there. Each named checkpoint gets one kill case per runtime and OS, for both a K0 and a K1 release, with and without a confirmation where the flag matters.
+
