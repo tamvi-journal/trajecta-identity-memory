@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -188,12 +189,16 @@ def test_vietnamese_cue_hits(stacked):
 
 
 def test_decay_fades_unpinned_and_is_incremental(stacked):
-    first = stacked.decay(now="2026-12-31T00:00:00+00:00")
+    # The fixture stamps records at wall-clock time, so a fixed future date shrinks the
+    # elapsed decay window as the calendar advances (it went red on 2026-11-20).
+    # Keep the window the test was written with (≈80 days) by deriving it from now.
+    later = (datetime.now(timezone.utc) + timedelta(days=100)).replace(microsecond=0).isoformat()
+    first = stacked.decay(now=later)
     assert first["adjusted"] > 0
     assert stacked.store.current_view("core")[0]["accessibility"] == 1.0
     faded = stacked.store.current_view("phase:tail-r1")[0]["accessibility"]
     assert faded < 0.15
-    second = stacked.decay(now="2026-12-31T00:00:00+00:00")
+    second = stacked.decay(now=later)
     assert second["adjusted"] == 0
     assert "phase:tail-r1" not in ids(stacked.retrieve("states exist only while running", track=False))
 
